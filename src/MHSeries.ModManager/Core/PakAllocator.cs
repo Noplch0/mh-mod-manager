@@ -11,34 +11,21 @@ public static class PakAllocator
             return;
         }
 
-        var used = new HashSet<int>();
-        if (Directory.Exists(gamePath))
-        {
-            foreach (var file in Directory.GetFiles(gamePath, game.PakPrefix + "*.pak"))
-            {
-                var number = ModLayoutParser.ParsePakNumber(file);
-                if (number > 0)
-                {
-                    used.Add(number);
-                }
-            }
-        }
+        var targetNames = GetPakFiles(target, useOverwrite: true)
+            .Select(file => Path.GetFileName(target.DeployPath(file)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var used = new HashSet<int>(ExistingPatchNumbers(game, gamePath, targetNames));
 
         foreach (var mod in mods)
         {
-            if (!mod.Enabled && mod != target)
-            {
-                continue;
-            }
-
-            if (!enabling && mod == target)
+            if (mod == target || !mod.Enabled)
             {
                 continue;
             }
 
             foreach (var file in GetPakFiles(mod, useOverwrite: true))
             {
-                var number = ModLayoutParser.ParsePakNumber(file);
+                var number = ModLayoutParser.ParsePakNumber(mod.DeployPath(file));
                 if (number > 0)
                 {
                     used.Add(number);
@@ -46,7 +33,7 @@ public static class PakAllocator
             }
         }
 
-        var next = Math.Max(game.PakBaseId + 1, 1);
+        var next = used.Count > 0 ? used.Max() + 1 : 1;
         foreach (var file in GetPakFiles(target, useOverwrite: false))
         {
             if (!enabling)
@@ -80,8 +67,13 @@ public static class PakAllocator
         }
 
         var existing = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var file in Directory.GetFiles(gamePath, game.PakPrefix + "*.pak"))
+        foreach (var file in Directory.GetFiles(gamePath, "*.pak"))
         {
+            if (!IsPatchPak(game, Path.GetFileName(file)))
+            {
+                continue;
+            }
+
             var number = ModLayoutParser.ParsePakNumber(file);
             if (number >= 1)
             {
@@ -132,6 +124,34 @@ public static class PakAllocator
     }
 
     public static void Clear(ModRecord mod) => mod.OverwriteFiles.Clear();
+
+    private static IEnumerable<int> ExistingPatchNumbers(GameProfile game, string gamePath, HashSet<string> ignoreNames)
+    {
+        if (!Directory.Exists(gamePath))
+        {
+            yield break;
+        }
+
+        foreach (var file in Directory.GetFiles(gamePath, "*.pak"))
+        {
+            var name = Path.GetFileName(file);
+            if (ignoreNames.Contains(name) || !IsPatchPak(game, name))
+            {
+                continue;
+            }
+
+            var number = ModLayoutParser.ParsePakNumber(name);
+            if (number > 0)
+            {
+                yield return number;
+            }
+        }
+    }
+
+    private static bool IsPatchPak(GameProfile game, string fileName) =>
+        fileName.Contains(".patch_", StringComparison.OrdinalIgnoreCase)
+        || (!string.IsNullOrEmpty(game.PakPrefix)
+            && fileName.StartsWith(game.PakPrefix, StringComparison.OrdinalIgnoreCase));
 
     private static string Normalize(string path) => path.Replace('\\', '/');
 

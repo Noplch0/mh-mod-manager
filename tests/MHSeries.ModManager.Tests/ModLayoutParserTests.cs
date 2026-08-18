@@ -268,6 +268,33 @@ public sealed class ModLayoutParserTests : IDisposable
     }
 
     [Fact]
+    public void PakAllocatorFollowsTheHighestExistingGamePatch()
+    {
+        var root = CreateRoot();
+        WriteFile(root, "re_chunk_000.pak", "base");
+        WriteFile(root, "re_chunk_000.pak.sub_000.pak", "sub");
+        WriteFile(root, "re_chunk_000.pak.sub_000.pak.patch_009.pak", "official");
+        WriteFile(root, "re_chunk_000.pak.sub_000.pak.patch_010.pak", "official-next");
+        var mod = new ModRecord { Id = 1001, Enabled = true, Files = ["source.pak"] };
+
+        PakAllocator.Assign(GameProfile.Get(GameId.Wilds), root, [mod], mod, true);
+
+        Assert.Equal("re_chunk_000.pak.sub_000.pak.patch_011.pak", mod.OverwriteFiles["source.pak"]);
+    }
+
+    [Fact]
+    public void RisePakAllocatorDoesNotUseAFixedStartingNumber()
+    {
+        var root = CreateRoot();
+        WriteFile(root, "re_chunk_000.pak.patch_003.pak", "official");
+        var mod = new ModRecord { Id = 1001, Enabled = true, Files = ["source.pak"] };
+
+        PakAllocator.Assign(GameProfile.Get(GameId.Rise), root, [mod], mod, true);
+
+        Assert.Equal("re_chunk_000.pak.patch_004.pak", mod.OverwriteFiles["source.pak"]);
+    }
+
+    [Fact]
     public void RawPakNameIsAcceptedForStorageAndMappedBeforeDeployment()
     {
         var root = CreateRoot();
@@ -281,7 +308,7 @@ public sealed class ModLayoutParserTests : IDisposable
 
         Assert.Equal("visual-overhaul.pak", item.RelativeDest);
         Assert.True(ModLayoutParser.IsSafeStoredPath(item.RelativeDest));
-        Assert.Equal("re_chunk_000.pak.patch_002.pak", mod.DeployPath(item.RelativeDest));
+        Assert.Equal("re_chunk_000.pak.patch_001.pak", mod.DeployPath(item.RelativeDest));
         Assert.True(ModLayoutParser.IsSafeDeploymentPath(game, mod.DeployPath(item.RelativeDest)));
     }
 

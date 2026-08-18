@@ -110,7 +110,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string GamePath => SelectedGame?.GamePath ?? "未设置游戏目录";
     public string DeployRoot => SelectedGame is null ? "" : SelectedGame.Profile.Id == GameId.World ? "nativePC" : "natives / reframework";
     public string GameState => SelectedGame?.IsInstalled == true ? "已找到游戏" : "等待设置路径";
-    public string PakState => SelectedGame?.Profile.UsesPakPatches == true ? "PAK 补丁编号自动管理" : "nativePC 文件覆盖模式";
+    public string PakState => SelectedGame?.Profile.UsesPakPatches == true ? "PAK 编号跟随游戏已有补丁" : "nativePC 文件覆盖模式";
     public string EnableSummary => $"{EnabledMods} / {TotalMods} 已启用";
 
     public ICommand RefreshCommand { get; }
