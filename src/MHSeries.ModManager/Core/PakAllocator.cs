@@ -1,0 +1,146 @@
+using HuntForge.Models;
+
+namespace HuntForge.Core;
+
+public static class PakAllocator
+{
+    public static void Assign(GameProfile game, string gamePath, IEnumerable<ModRecord> mods, ModRecord target, bool enabling)
+    {
+        if (!game.UsesPakPatches)
+        {
+            return;
+        }
+
+        var used = new HashSet<int>();
+        if (Directory.Exists(gamePath))
+        {
+            foreach (var file in Directory.GetFiles(gamePath, game.PakPrefix + "*.pak"))
+            {
+                var number = ModLayoutParser.ParsePakNumber(file);
+                if (number > 0)
+                {
+                    used.Add(number);
+                }
+            }
+        }
+
+        foreach (var mod in mods)
+        {
+            if (!mod.Enabled && mod != target)
+            {
+                continue;
+            }
+
+            if (!enabling && mod == target)
+            {
+                continue;
+            }
+
+            foreach (var file in GetPakFiles(mod, useOverwrite: true))
+            {
+                var number = ModLayoutParser.ParsePakNumber(file);
+                if (number > 0)
+                {
+                    used.Add(number);
+                }
+            }
+        }
+
+        var next = Math.Max(game.PakBaseId + 1, 1);
+        foreach (var file in GetPakFiles(target, useOverwrite: false))
+        {
+            if (!enabling)
+            {
+                target.OverwriteFiles.Remove(Normalize(file));
+                continue;
+            }
+
+            while (used.Contains(next))
+            {
+                next++;
+            }
+
+            if (next > 999)
+            {
+                throw new InvalidOperationException("PAK 补丁编号已用尽（最大 999）");
+            }
+
+            var mapped = ModLayoutParser.FormatPakName(game.PakPrefix, next);
+            target.OverwriteFiles[Normalize(file)] = mapped;
+            used.Add(next);
+            next++;
+        }
+    }
+
+    public static void Repair(GameProfile game, string gamePath, IEnumerable<ModRecord> mods)
+    {
+        if (!game.UsesPakPatches || !Directory.Exists(gamePath))
+        {
+            return;
+        }
+
+        var existing = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in Directory.GetFiles(gamePath, game.PakPrefix + "*.pak"))
+        {
+            var number = ModLayoutParser.ParsePakNumber(file);
+            if (number >= 1)
+            {
+                existing[Md5Prefix(file)] = number;
+            }
+        }
+
+        foreach (var mod in mods.Where(m => m.Enabled))
+        {
+            var changed = false;
+            foreach (var file in GetPakFiles(mod, useOverwrite: false))
+            {
+                var source = Path.Combine(AppPaths.ModFilesDir(game.SteamAppId, mod.Id), file.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(source))
+                {
+                    continue;
+                }
+
+                var hash = Md5Prefix(source);
+                if (existing.TryGetValue(hash, out var number))
+                {
+                    var mapped = ModLayoutParser.FormatPakName(game.PakPrefix, number);
+                    if (!string.Equals(mod.DeployPath(file), mapped, StringComparison.OrdinalIgnoreCase))
+                    {
+                        mod.OverwriteFiles[Normalize(file)] = mapped;
+                        changed = true;
+                    }
+                }
+            }
+
+            if (changed)
+            {
+                ModRepository.Save(game, mod);
+            }
+        }
+    }
+
+    public static IEnumerable<string> GetPakFiles(ModRecord mod, bool useOverwrite)
+    {
+        foreach (var file in mod.Files)
+        {
+            var dest = useOverwrite ? mod.DeployPath(file) : file;
+            if (ModLayoutParser.IsPakFile(dest) || ModLayoutParser.IsPakFile(file))
+            {
+                yield return file;
+            }
+        }
+    }
+
+    public static void Clear(ModRecord mod) => mod.OverwriteFiles.Clear();
+
+    private static string Normalize(string path) => path.Replace('\\', '/');
+
+    private static string Md5Prefix(string path)
+    {
+        using var stream = File.OpenRead(path);
+        var buffer = new byte[Math.Min(stream.Length, 1024 * 1024)];
+        var read = stream.Read(buffer, 0, buffer.Length);
+        var hash = System.Security.Cryptography.MD5.HashData(buffer.AsSpan(0, read));
+        return Convert.ToHexString(hash) + ":" + new FileInfo(path).Length;
+    }
+}

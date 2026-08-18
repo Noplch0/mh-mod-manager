@@ -1,0 +1,252 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="HuntForge.Views.MainWindow"
+        Width="1400"
+        Height="860"
+        MinWidth="1100"
+        MinHeight="700"
+        Title="HuntForge"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaTitleBarHeightHint="42"
+        ExtendClientAreaChromeHints="NoChrome">
+  <Grid RowDefinitions="42,*" Background="#0A0D12">
+    <Border Grid.Row="0" Background="#0D1117" BorderBrush="#1B242D" BorderThickness="0,0,0,1" PointerPressed="TitleBarPressed">
+      <Grid ColumnDefinitions="220,*,Auto">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="9" Margin="18,0,0,0" VerticalAlignment="Center">
+          <Border Width="22" Height="22" Background="#C9A35F" CornerRadius="5">
+            <TextBlock Text="H" Foreground="#15120C" FontWeight="Bold" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <TextBlock Text="HUNTFORGE" FontWeight="Bold" FontSize="12" Foreground="#EDE7DA" VerticalAlignment="Center" />
+        </StackPanel>
+        <TextBlock Grid.Column="1" Text="MOD WORKBENCH / MONSTER HUNTER" Classes="muted" VerticalAlignment="Center" />
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="3" Margin="0,0,12,0">
+          <Button Classes="icon" Content="_" ToolTip.Tip="最小化" Click="MinimizeClick" />
+          <Button Classes="icon" Content="□" ToolTip.Tip="最大化" Click="MaximizeClick" />
+          <Button Classes="icon" Content="×" ToolTip.Tip="关闭" Click="CloseClick" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <Grid Grid.Row="1" ColumnDefinitions="250,*,320" RowDefinitions="*,38">
+      <Border Grid.Column="0" Background="#0D1117" BorderBrush="#1B242D" BorderThickness="0,0,1,0" Padding="14,20,14,14">
+        <Grid RowDefinitions="Auto,Auto,*,Auto">
+          <StackPanel Grid.Row="0" Margin="6,0,6,22">
+            <TextBlock Text="GAME LIBRARY" Classes="eyebrow" />
+            <TextBlock Text="选择要管理的游戏" Classes="muted" Margin="0,5,0,0" />
+          </StackPanel>
+          <ItemsControl Grid.Row="1" ItemsSource="{Binding Games}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Border Classes="sidebarItem" Padding="10" PointerPressed="GamePressed">
+                  <Grid ColumnDefinitions="3,38,*,Auto">
+                    <Border Grid.Column="0" Width="2" Height="28" Background="#C9A35F" CornerRadius="1" IsVisible="{Binding IsSelected}" />
+                    <Border Grid.Column="1" Width="34" Height="34" Background="#202932" CornerRadius="7">
+                      <TextBlock Text="{Binding Initial}" Foreground="#C9A35F" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Grid.Column="2" Margin="11,0,5,0" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Profile.ShortName}" Foreground="#E8EDF1" FontSize="13" />
+                      <TextBlock Text="{Binding Status}" Classes="muted" Margin="0,3,0,0" />
+                    </StackPanel>
+                    <Ellipse Grid.Column="3" Width="7" Height="7" Fill="#6BB58A" VerticalAlignment="Center" IsVisible="{Binding IsInstalled}" />
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Border Grid.Row="3" Classes="card" Padding="12" Margin="0,18,0,0">
+            <StackPanel Spacing="8">
+              <TextBlock Text="QUICK STATUS" Classes="eyebrow" />
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="当前游戏" Classes="muted" />
+                <TextBlock Grid.Column="1" Text="{Binding GameState}" Foreground="#DDE4EA" FontSize="11" />
+              </Grid>
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="部署模式" Classes="muted" />
+                <TextBlock Grid.Column="1" Text="{Binding DeployRoot}" Foreground="#DDE4EA" FontSize="11" />
+              </Grid>
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="MOD 状态" Classes="muted" />
+                <TextBlock Grid.Column="1" Text="{Binding EnableSummary}" Foreground="#C9A35F" FontSize="11" />
+              </Grid>
+            </StackPanel>
+          </Border>
+        </Grid>
+      </Border>
+
+      <Border Grid.Column="1" Background="#0A0D12" Padding="28,26,28,22">
+        <Grid RowDefinitions="Auto,Auto,*,Auto">
+          <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock Text="{Binding SelectedGame.Profile.DisplayName}" Classes="h1" />
+              <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,7,0,0">
+                <TextBlock Text="{Binding PakState}" Classes="muted" />
+                <TextBlock Text="·" Classes="muted" />
+                <TextBlock Text="{Binding GamePath}" Classes="muted" TextTrimming="CharacterEllipsis" MaxWidth="500" />
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+              <Button Classes="action" Content="↻  刷新" Command="{Binding RefreshCommand}" />
+              <Button Classes="action" Content="＋  新建分组" Command="{Binding CreateGroupCommand}" />
+              <Button Classes="action" Content="⚙  设置" Command="{Binding SettingsCommand}" />
+              <Button Classes="primary" Content="＋  导入 MOD" Click="ImportClick" />
+            </StackPanel>
+          </Grid>
+          <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,24,0,16">
+            <Border Background="#111820" BorderBrush="#26313C" BorderThickness="1" CornerRadius="7" Padding="11,0">
+              <Grid ColumnDefinitions="Auto,*">
+                <TextBlock Text="⌕" Foreground="#8794A0" FontSize="19" VerticalAlignment="Center" Margin="0,0,8,1" />
+                <TextBox Grid.Column="1" Text="{Binding Search}" Watermark="搜索 MOD 名称、类型或作者" BorderThickness="0" Background="Transparent" Foreground="#E7EDF2" VerticalContentAlignment="Center" />
+              </Grid>
+            </Border>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" Margin="20,0,0,0">
+              <StackPanel>
+                <TextBlock Text="{Binding TotalMods}" Foreground="#F0F3F5" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                <TextBlock Text="全部" Classes="muted" HorizontalAlignment="Right" />
+              </StackPanel>
+              <StackPanel>
+                <TextBlock Text="{Binding EnabledMods}" Foreground="#C9A35F" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                <TextBlock Text="已启用" Classes="muted" HorizontalAlignment="Right" />
+              </StackPanel>
+            </StackPanel>
+          </Grid>
+
+          <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding FilteredGroups}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border Classes="card" Padding="12" Margin="0,0,0,14">
+                    <StackPanel>
+                      <Grid ColumnDefinitions="*,Auto" Margin="2,0,2,10">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                          <TextBox Text="{Binding Name}" Width="180" Watermark="分组名称" LostFocus="GroupNameLostFocus" Background="#111820" BorderBrush="#303B47" Foreground="#EDF1F4" />
+                          <TextBlock Text="{Binding Summary}" Classes="muted" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                          <Button Classes="icon" Content="↑" ToolTip.Tip="上移分组" Command="{Binding UpCommand}" />
+                          <Button Classes="icon" Content="↓" ToolTip.Tip="下移分组" Command="{Binding DownCommand}" />
+                          <Button Classes="icon" Content="⌫" ToolTip.Tip="删除分组" Command="{Binding DeleteCommand}" IsVisible="{Binding CanDelete}" />
+                          <ToggleSwitch IsChecked="{Binding AllEnabled, Mode=OneWay}" Click="GroupToggleClick" Margin="7,0,0,0" />
+                        </StackPanel>
+                      </Grid>
+                      <ItemsControl ItemsSource="{Binding Mods}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <Border Background="#0F151C" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                              <Grid ColumnDefinitions="54,*,Auto" MinHeight="62">
+                                <Border Grid.Column="0" Width="46" Height="46" Background="#202A32" CornerRadius="7">
+                                  <TextBlock Text="{Binding Category}" Foreground="#C9A35F" FontSize="10" TextWrapping="Wrap" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" Margin="3" />
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="12,0,12,0" Spacing="4" VerticalAlignment="Center">
+                                  <TextBlock Text="{Binding Name}" Foreground="#EDF1F4" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                  <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBlock Text="{Binding Version}" Classes="muted" />
+                                    <TextBlock Text="{Binding FileCount}" Classes="muted" />
+                                    <ComboBox ItemsSource="{Binding GroupChoices}" SelectedItem="{Binding SelectedGroup}" Width="130" MaxDropDownHeight="220">
+                                      <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                          <TextBlock Text="{Binding Name}" />
+                                        </DataTemplate>
+                                      </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                  </StackPanel>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                  <Button Classes="icon" Content="↑" ToolTip.Tip="组内上移" Command="{Binding UpCommand}" />
+                                  <Button Classes="icon" Content="↓" ToolTip.Tip="组内下移" Command="{Binding DownCommand}" />
+                                  <Button Classes="icon" Content="⌫" ToolTip.Tip="卸载 MOD" Command="{Binding RemoveCommand}" />
+                                  <ToggleSwitch IsChecked="{Binding Enabled, Mode=OneWay}" Click="ModToggleClick" Margin="7,0,0,0" />
+                                </StackPanel>
+                              </Grid>
+                            </Border>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+          <Grid Grid.Row="3" ColumnDefinitions="*,Auto" Margin="0,14,0,0">
+            <TextBlock Text="{Binding Status}" Classes="muted" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Classes="action" Content="清理部署文件" Click="CleanClick" />
+          </Grid>
+        </Grid>
+      </Border>
+
+      <Border Grid.Column="2" Background="#0D1117" BorderBrush="#1B242D" BorderThickness="1,0,0,0" Padding="20,26,20,20" IsVisible="{Binding ShowSettings}">
+        <ScrollViewer>
+          <StackPanel Spacing="18">
+            <StackPanel>
+              <TextBlock Text="WORKSPACE SETTINGS" Classes="eyebrow" />
+              <TextBlock Text="工作区设置" Classes="h1" FontSize="21" Margin="0,7,0,0" />
+            </StackPanel>
+            <StackPanel Spacing="7">
+              <TextBlock Text="游戏目录" Foreground="#DDE4EA" FontSize="12" />
+              <TextBlock Text="{Binding GamePath}" Classes="muted" TextWrapping="Wrap" />
+              <Button Classes="action" Content="选择目录" Click="ChooseGameClick" HorizontalAlignment="Left" />
+            </StackPanel>
+            <Border Height="1" Background="#26313C" />
+            <StackPanel Spacing="13">
+              <TextBlock Text="部署行为" Foreground="#DDE4EA" FontSize="12" />
+              <ToggleSwitch IsChecked="{Binding CheckRunning}" Content="游戏运行时阻止修改" />
+              <ToggleSwitch IsChecked="{Binding FixPakNumbers}" Content="自动修复 PAK 编号" />
+            </StackPanel>
+            <StackPanel Spacing="7">
+              <TextBlock Text="安装源文件" Foreground="#DDE4EA" FontSize="12" />
+              <ComboBox SelectedIndex="{Binding InstallOption}" Width="220" HorizontalAlignment="Left">
+                <ComboBoxItem Content="不复制，保留原位置" />
+                <ComboBoxItem Content="复制到工作区" />
+                <ComboBoxItem Content="移动到工作区" />
+              </ComboBox>
+            </StackPanel>
+            <Border Classes="card" Padding="12" Margin="0,10,0,0">
+              <StackPanel Spacing="7">
+                <TextBlock Text="部署规则" Classes="eyebrow" />
+                <TextBlock Text="世界使用 nativePC 覆盖文件。崛起与荒野使用 natives、REFramework 以及游戏 PAK 补丁文件。" Classes="muted" TextWrapping="Wrap" LineHeight="18" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+
+      <Border Grid.Column="2" Background="#0D1117" BorderBrush="#1B242D" BorderThickness="1,0,0,0" Padding="20,26,20,20" IsVisible="{Binding IsInfoVisible}">
+        <StackPanel Spacing="18">
+          <StackPanel>
+            <TextBlock Text="WORKSPACE" Classes="eyebrow" />
+            <TextBlock Text="当前工作区" Classes="h1" FontSize="21" Margin="0,7,0,0" />
+          </StackPanel>
+          <Border Classes="card" Padding="14">
+            <StackPanel Spacing="10">
+              <TextBlock Text="部署概览" Foreground="#DDE4EA" FontSize="12" />
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="游戏状态" Classes="muted" />
+                <TextBlock Grid.Column="1" Text="{Binding GameState}" Foreground="#6BB58A" FontSize="11" />
+              </Grid>
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="安装方式" Classes="muted" />
+                <TextBlock Grid.Column="1" Text="{Binding DeployRoot}" Foreground="#DDE4EA" FontSize="11" />
+              </Grid>
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="PAK 策略" Classes="muted" />
+                <TextBlock Grid.Column="1" Text="{Binding PakState}" Foreground="#DDE4EA" FontSize="11" />
+              </Grid>
+            </StackPanel>
+          </Border>
+          <StackPanel Spacing="8">
+            <TextBlock Text="工作区提示" Classes="eyebrow" />
+            <TextBlock Text="靠后的分组覆盖靠前的分组。组开关会全开或全关组内全部 MOD。" Classes="muted" TextWrapping="Wrap" LineHeight="18" />
+          </StackPanel>
+          <Button Classes="action" Content="⚙  打开工作区设置" Command="{Binding SettingsCommand}" HorizontalAlignment="Left" />
+        </StackPanel>
+      </Border>
+
+      <Border Grid.Row="1" Grid.ColumnSpan="3" Background="#0D1117" BorderBrush="#1B242D" BorderThickness="0,1,0,0" Padding="16,0">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Text="HuntForge  /  offline mod workspace" Classes="muted" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1" Text="{Binding Status}" Classes="muted" VerticalAlignment="Center" />
+        </Grid>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>

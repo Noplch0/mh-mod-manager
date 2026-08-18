@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MHSeries.ModManager/MHSeries.ModManager.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MHSeries.ModManager.Tests/MHSeries.ModManager.Tests.csproj" />
+  </Folder>
+</Solution>

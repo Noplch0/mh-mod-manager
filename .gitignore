@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+**/data/
+dist/
+.vs/
+*.user
+*.suo
+狩技MOD盒子.exe
