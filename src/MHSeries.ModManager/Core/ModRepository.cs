@@ -118,7 +118,7 @@ public static class ModRepository
         foreach (var file in Directory.GetFiles(filesDir, "*", SearchOption.AllDirectories))
         {
             var name = Path.GetFileName(file);
-            if (name.Equals("screenshot.png", StringComparison.OrdinalIgnoreCase))
+            if (IsPreviewFileName(name) && Path.GetDirectoryName(file) == filesDir)
             {
                 continue;
             }
@@ -166,5 +166,13 @@ public static class ModRepository
         }
 
         SaveGroups(game, groups);
+    }
+
+    public static bool IsPreviewFileName(string name)
+    {
+        var stem = Path.GetFileNameWithoutExtension(name);
+        return stem.Equals("screenshot", StringComparison.OrdinalIgnoreCase)
+               || stem.Equals("preview", StringComparison.OrdinalIgnoreCase)
+               || stem.StartsWith("cover", StringComparison.OrdinalIgnoreCase);
     }
 }

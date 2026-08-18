@@ -6,9 +6,13 @@ public static class ModLayoutParser
 {
     private static readonly string[] PreviewNames =
     [
-        "preview.png", "preview.jpg", "screenshot.png", "screenshot.jpg",
+        "preview.png", "preview.jpg", "preview.jpeg", "preview.webp",
+        "screenshot.png", "screenshot.jpg", "screenshot.jpeg", "screenshot.webp",
+        "cover.png", "cover.jpg", "cover.jpeg", "cover.webp",
         "未标题-1.jpg", "未标题-1.png"
     ];
+
+    private static readonly string[] PreviewExtensions = [".png", ".jpg", ".jpeg", ".webp", ".bmp"];
 
     private static readonly HashSet<string> GameDlls = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -596,7 +600,23 @@ public static class ModLayoutParser
             }
         }
 
-        return "";
+        var images = Directory.GetFiles(root, "*", SearchOption.TopDirectoryOnly)
+            .Where(file => PreviewExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+            .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (images.Count == 1)
+        {
+            return images[0];
+        }
+
+        var named = images.FirstOrDefault(file =>
+        {
+            var stem = Path.GetFileNameWithoutExtension(file);
+            return stem.StartsWith("cover", StringComparison.OrdinalIgnoreCase)
+                   || stem.StartsWith("preview", StringComparison.OrdinalIgnoreCase)
+                   || stem.StartsWith("screenshot", StringComparison.OrdinalIgnoreCase);
+        });
+        return named ?? "";
     }
 
     internal static string InferCategory(GameProfile game, ParsedMod parsed)

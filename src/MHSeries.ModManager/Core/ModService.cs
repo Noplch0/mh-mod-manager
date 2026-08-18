@@ -136,7 +136,13 @@ public sealed class ModService
 
             if (!string.IsNullOrWhiteSpace(parsed.PreviewSource) && File.Exists(parsed.PreviewSource))
             {
-                var preview = Path.Combine(destDir, "screenshot.png");
+                var ext = Path.GetExtension(parsed.PreviewSource);
+                if (!IsPreviewExtension(ext))
+                {
+                    ext = ".png";
+                }
+
+                var preview = Path.Combine(destDir, "screenshot" + ext.ToLowerInvariant());
                 File.Copy(parsed.PreviewSource, preview, true);
                 record.PreviewImage = preview;
             }
@@ -347,21 +353,41 @@ public sealed class ModService
         RedeployIfNeeded(game, GetMods(game));
     }
 
-    public void MoveModToGroup(GameProfile game, ModRecord mod, int groupId)
+    public void MoveModToGroup(GameProfile game, ModRecord mod, int groupId) =>
+        MoveModsToGroup(game, [mod], groupId);
+
+    public void MoveModsToGroup(GameProfile game, IReadOnlyList<ModRecord> records, int groupId)
     {
         var groups = GetGroups(game);
-        if (mod.GroupId == groupId || groups.All(group => group.Id != groupId))
+        if (records.Count == 0 || groups.All(group => group.Id != groupId))
+        {
+            return;
+        }
+
+        var moving = records.Where(item => item.GroupId != groupId).ToList();
+        if (moving.Count == 0)
         {
             return;
         }
 
         var mods = GetMods(game);
-        mod.GroupId = groupId;
-        var members = mods.Where(item => item.GroupId == groupId && item != mod).ToList();
-        mod.Index = members.Count == 0 ? 1 : members.Max(item => item.Index) + 1;
-        ModRepository.Save(game, mod);
+        var members = mods.Where(item => item.GroupId == groupId && !moving.Contains(item)).ToList();
+        var nextIndex = members.Count == 0 ? 1 : members.Max(item => item.Index) + 1;
+        foreach (var mod in moving)
+        {
+            mod.GroupId = groupId;
+            mod.Index = nextIndex++;
+            ModRepository.Save(game, mod);
+        }
+
         ModRepository.FixIndex(game, mods, groups);
         RedeployIfNeeded(game, mods);
+    }
+
+    public void SetGroupCollapsed(GameProfile game, ModGroup group, bool collapsed)
+    {
+        group.Collapsed = collapsed;
+        ModRepository.SaveGroups(game, GetGroups(game));
     }
 
     public void SetGroupEnabled(GameProfile game, ModGroup group, bool enable)
@@ -465,9 +491,26 @@ public sealed class ModService
             return mod.PreviewImage;
         }
 
-        var fallback = Path.Combine(AppPaths.ModFilesDir(game.SteamAppId, mod.Id), "screenshot.png");
-        return File.Exists(fallback) ? fallback : "";
+        var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
+        if (Directory.Exists(filesDir))
+        {
+            foreach (var file in Directory.GetFiles(filesDir, "*", SearchOption.TopDirectoryOnly))
+            {
+                if (ModRepository.IsPreviewFileName(Path.GetFileName(file)))
+                {
+                    return file;
+                }
+            }
+        }
+
+        return "";
     }
+
+    private static bool IsPreviewExtension(string ext) =>
+        ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
+        || ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+        || ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+        || ext.Equals(".webp", StringComparison.OrdinalIgnoreCase);
 
     private void RedeployIfNeeded(GameProfile game, List<ModRecord> mods)
     {

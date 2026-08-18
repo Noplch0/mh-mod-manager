@@ -119,6 +119,58 @@ public sealed class ModServiceTests : IDisposable
     }
 
     [Fact]
+    public void MoveModsToGroupMovesEverySelectedMod()
+    {
+        var first = _service.Install(_game, CreateParsed("one", "one"));
+        var second = _service.Install(_game, CreateParsed("two", "two"));
+        var leftover = _service.Install(_game, CreateParsed("three", "three"));
+        var group = _service.CreateGroup(_game, "外观");
+
+        _service.MoveModsToGroup(_game, [first, second], group.Id);
+
+        Assert.Equal(group.Id, first.GroupId);
+        Assert.Equal(group.Id, second.GroupId);
+        Assert.NotEqual(group.Id, leftover.GroupId);
+        Assert.Equal(1, first.Index);
+        Assert.Equal(2, second.Index);
+    }
+
+    [Fact]
+    public void GroupCollapseIsPersisted()
+    {
+        var group = _service.CreateGroup(_game, "折叠");
+        _service.SetGroupCollapsed(_game, group, true);
+
+        Assert.True(group.Collapsed);
+        var reloaded = JsonUtil.Load(AppPaths.GroupsFile(_appId), new List<ModGroup>());
+        Assert.Contains(reloaded, item => item.Id == group.Id && item.Collapsed);
+    }
+
+    [Fact]
+    public void InstallKeepsPreviewImageExtension()
+    {
+        var staging = CreateStaging("preview-mod");
+        var source = WriteFile(staging, "nativePC/shared.bin", "preview-mod");
+        var preview = Path.Combine(staging, "preview.jpg");
+        File.WriteAllBytes(preview, [0xFF, 0xD8, 0xFF, 0xD9]);
+        var parsed = new ParsedMod
+        {
+            Name = "preview-mod",
+            SourceFile = Path.Combine(staging, "preview-mod.zip"),
+            StagingDir = staging,
+            PreviewSource = preview,
+            Files = [new ParsedFile { SourcePath = source, RelativeDest = "nativePC/shared.bin" }]
+        };
+
+        var installed = _service.Install(_game, parsed);
+        var previewPath = _service.PreviewPath(_game, installed);
+
+        Assert.True(File.Exists(previewPath));
+        Assert.Equal(".jpg", Path.GetExtension(previewPath), StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(installed.Files, file => file.Contains("screenshot", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void DeletingAGroupMovesModsBackToDefault()
     {
         var mod = _service.Install(_game, CreateParsed("orphan", "data"));

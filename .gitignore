@@ -5,4 +5,6 @@ dist/
 .vs/
 *.user
 *.suo
+node_modules/
+desktop/dist/
 狩技MOD盒子.exe

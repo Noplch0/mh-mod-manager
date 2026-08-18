@@ -116,6 +116,30 @@ public sealed class ModLayoutParserTests : IDisposable
     }
 
     [Fact]
+    public void RootPreviewImageIsDetectedAndExcludedFromDeployFiles()
+    {
+        var root = CreateRoot("nativePC");
+        WriteFile(root, "nativePC/pl/test.bin", "mod");
+        WriteFile(root, "preview.png", "cover");
+        var parsed = ModLayoutParser.Parse(GameProfile.Get(GameId.World), WriteFile(root, "source.tmp", ""), root);
+
+        Assert.True(File.Exists(parsed.PreviewSource));
+        Assert.Equal("preview.png", Path.GetFileName(parsed.PreviewSource), StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(parsed.Files, file => Path.GetFileName(file.RelativeDest).Equals("preview.png", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RootCoverImageIsDetected()
+    {
+        var root = CreateRoot("nativePC");
+        WriteFile(root, "nativePC/pl/test.bin", "mod");
+        WriteFile(root, "Cover.png", "cover");
+        var parsed = ModLayoutParser.Parse(GameProfile.Get(GameId.World), WriteFile(root, "source.tmp", ""), root);
+
+        Assert.Equal("Cover.png", Path.GetFileName(parsed.PreviewSource), StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void KnownWorldLoaderFilesAreAllowedButGameExecutablesAreNot()
     {
         var root = CreateRoot("nativePC");

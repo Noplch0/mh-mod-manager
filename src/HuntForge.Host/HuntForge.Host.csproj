@@ -1,14 +1,14 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <TargetFramework>net9.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>HuntForge</RootNamespace>
-    <AssemblyName>HuntForge</AssemblyName>
+    <RootNamespace>HuntForge.Host</RootNamespace>
+    <AssemblyName>HuntForge.Host</AssemblyName>
     <Product>HuntForge</Product>
     <Version>1.0.0</Version>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="SharpCompress" Version="0.39.0" />
+    <ProjectReference Include="..\MHSeries.ModManager\MHSeries.ModManager.csproj" />
   </ItemGroup>
 </Project>

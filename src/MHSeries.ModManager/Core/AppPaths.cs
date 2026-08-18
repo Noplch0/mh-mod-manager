@@ -2,7 +2,19 @@ namespace HuntForge.Core;
 
 public static class AppPaths
 {
-    public static string Root { get; } = Path.Combine(AppContext.BaseDirectory, "data");
+    private static string? _root;
+
+    public static string Root => _root ??= Path.Combine(AppContext.BaseDirectory, "data");
+
+    public static void Configure(string? root)
+    {
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return;
+        }
+
+        _root = Path.GetFullPath(root);
+    }
 
     public static string SettingsFile => Path.Combine(Root, "settings.json");
 

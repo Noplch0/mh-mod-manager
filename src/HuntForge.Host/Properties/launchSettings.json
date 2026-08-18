@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "HuntForge.Host": {
+      "commandName": "Project",
+      "applicationUrl": "http://127.0.0.1:17865",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Production"
+      }
+    }
+  }
+}

@@ -6,4 +6,5 @@ public sealed class ModGroup
     public string Name { get; set; } = "";
     public int Index { get; set; }
     public bool IsDefault { get; set; }
+    public bool Collapsed { get; set; }
 }
