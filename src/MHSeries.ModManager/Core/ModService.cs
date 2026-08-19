@@ -59,7 +59,172 @@ public sealed class ModService
 
     public ParsedMod ParseImport(GameProfile game, string path, IProgress<int>? progress = null)
     {
+        var units = ParseImportUnits(game, path, progress, out _);
+        return units.Count == 1
+            ? units[0]
+            : throw new InvalidOperationException("这个压缩包包含多个独立 MOD，请使用批量导入");
+    }
+
+    public ImportBatch Import(GameProfile game, string path, IProgress<int>? progress = null)
+    {
+        var units = ParseImportUnits(game, path, progress, out var bundleName);
+        if (units.Count == 0)
+        {
+            throw new InvalidOperationException("未能识别这个 MOD 的文件结构");
+        }
+
+        ModGroup? group = null;
+        if (units.Count > 1)
+        {
+            group = CreateGroup(game, bundleName);
+        }
+
+        var installed = new List<ModRecord>();
+        Exception? error = null;
+        for (var i = 0; i < units.Count; i++)
+        {
+            var parsed = units[i];
+            try
+            {
+                installed.Add(Install(game, parsed, group?.Id, keepSource: i == units.Count - 1));
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                TryDelete(parsed.StagingDir);
+            }
+        }
+
+        if (installed.Count == 0)
+        {
+            throw error ?? new InvalidOperationException("未能识别这个 MOD 的文件结构");
+        }
+
+        return new ImportBatch { Mods = installed, Group = group };
+    }
+
+    public ImportBatch Update(GameProfile game, ModRecord existing, string path, IProgress<int>? progress = null)
+    {
+        var units = ParseImportUnits(game, path, progress, out var bundleName);
+        if (units.Count == 0)
+        {
+            throw new InvalidOperationException("未能识别这个 MOD 的文件结构");
+        }
+
+        if (units.Count == 1)
+        {
+            Replace(game, existing, units[0]);
+            return new ImportBatch { Mods = [existing] };
+        }
+
+        Uninstall(game, existing);
+        var group = CreateGroup(game, bundleName);
+        var installed = new List<ModRecord>();
+        Exception? error = null;
+        for (var i = 0; i < units.Count; i++)
+        {
+            var parsed = units[i];
+            try
+            {
+                installed.Add(Install(game, parsed, group.Id, keepSource: i == units.Count - 1));
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                TryDelete(parsed.StagingDir);
+            }
+        }
+
+        if (installed.Count == 0)
+        {
+            throw error ?? new InvalidOperationException("未能识别这个 MOD 的文件结构");
+        }
+
+        return new ImportBatch { Mods = installed, Group = group };
+    }
+
+    public void Replace(GameProfile game, ModRecord existing, ParsedMod parsed)
+    {
+        ValidateParsedMod(game, parsed);
+        var wasEnabled = existing.Enabled;
+        if (wasEnabled)
+        {
+            SetEnabled(game, existing, false);
+        }
+
+        var destDir = AppPaths.ModFilesDir(game.SteamAppId, existing.Id);
+        if (Directory.Exists(destDir))
+        {
+            Directory.Delete(destDir, true);
+        }
+
+        try
+        {
+            Directory.CreateDirectory(destDir);
+            existing.Files.Clear();
+            existing.OverwriteFiles.Clear();
+            existing.Name = parsed.Name;
+            if (string.IsNullOrWhiteSpace(existing.DisplayName))
+            {
+                existing.DisplayName = string.IsNullOrWhiteSpace(parsed.Name)
+                    ? Path.GetFileNameWithoutExtension(parsed.SourceFile)
+                    : parsed.Name;
+            }
+            existing.Version = parsed.Version;
+            existing.Author = parsed.Author;
+            existing.Category = parsed.Category;
+            existing.HomeUrl = parsed.HomeUrl;
+            existing.NexusId = parsed.NexusId;
+            existing.InstallTime = DateTimeOffset.Now;
+            existing.PreviewImage = "";
+            if (existing.NexusId > 0 && string.IsNullOrWhiteSpace(existing.HomeUrl))
+            {
+                existing.HomeUrl = NexusNames.GetNexusUrl(game, existing.NexusId);
+            }
+
+            foreach (var file in parsed.Files)
+            {
+                var dest = Path.Combine(destDir, file.RelativeDest.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                CopyVerified(file.SourcePath, dest);
+                existing.Files.Add(file.RelativeDest);
+            }
+
+            if (!string.IsNullOrWhiteSpace(parsed.PreviewSource) && File.Exists(parsed.PreviewSource))
+            {
+                var ext = Path.GetExtension(parsed.PreviewSource);
+                if (!IsPreviewExtension(ext))
+                {
+                    ext = ".png";
+                }
+
+                var preview = Path.Combine(destDir, "screenshot" + ext.ToLowerInvariant());
+                File.Copy(parsed.PreviewSource, preview, true);
+                existing.PreviewImage = preview;
+            }
+
+            existing.SourceFile = KeepSource(parsed.SourceFile, parsed.Name);
+            ModRepository.Save(game, existing);
+        }
+        catch
+        {
+            throw;
+        }
+        finally
+        {
+            TryDelete(parsed.StagingDir);
+        }
+
+        if (wasEnabled)
+        {
+            SetEnabled(game, existing, true);
+        }
+    }
+
+    public List<ParsedMod> ParseImportUnits(GameProfile game, string path, IProgress<int>? progress, out string bundleName)
+    {
         AppPaths.EnsureCreated();
+        bundleName = BundleName(path);
         var staging = Path.Combine(AppPaths.TempDir, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(staging);
 
@@ -72,20 +237,19 @@ public sealed class ModService
             else if (ArchiveExtractor.IsArchive(path))
             {
                 ArchiveExtractor.Extract(path, staging, progress);
-                ArchiveExtractor.ExtractNested(staging);
             }
             else
             {
                 File.Copy(path, Path.Combine(staging, Path.GetFileName(path)), true);
             }
 
-            var parsed = ModLayoutParser.Parse(game, path, staging);
-            if (parsed.Files.Count == 0)
+            var units = SplitImportUnits(game, path, staging);
+            if (units.Count == 0)
             {
                 throw new InvalidOperationException("未能识别这个 MOD 的文件结构");
             }
 
-            return parsed;
+            return units;
         }
         catch
         {
@@ -94,10 +258,13 @@ public sealed class ModService
         }
     }
 
-    public ModRecord Install(GameProfile game, ParsedMod parsed)
+    public ModRecord Install(GameProfile game, ParsedMod parsed) => Install(game, parsed, null, true);
+
+    public ModRecord Install(GameProfile game, ParsedMod parsed, int? groupId, bool keepSource)
     {
         ValidateParsedMod(game, parsed);
         var mods = GetMods(game);
+        var groups = GetGroups(game);
         var record = new ModRecord
         {
             Name = parsed.Name,
@@ -116,7 +283,14 @@ public sealed class ModService
             record.HomeUrl = NexusNames.GetNexusUrl(game, record.NexusId);
         }
 
-        ModRepository.MakeId(mods, GetGroups(game), record);
+        ModRepository.MakeId(mods, groups, record);
+        if (groupId is int targetGroup && groups.Any(item => item.Id == targetGroup))
+        {
+            var members = mods.Where(item => item.GroupId == targetGroup).ToList();
+            record.GroupId = targetGroup;
+            record.Index = members.Count == 0 ? 1 : members.Max(item => item.Index) + 1;
+        }
+
         var destDir = AppPaths.ModFilesDir(game.SteamAppId, record.Id);
         if (Directory.Exists(destDir))
         {
@@ -147,7 +321,9 @@ public sealed class ModService
                 record.PreviewImage = preview;
             }
 
-            record.SourceFile = KeepSource(parsed.SourceFile, parsed.Name);
+            record.SourceFile = keepSource
+                ? KeepSource(parsed.SourceFile, parsed.Name)
+                : parsed.SourceFile;
             ModRepository.Save(game, record);
             mods.Add(record);
             return record;
@@ -311,6 +487,17 @@ public sealed class ModService
 
         group.Name = name.Trim();
         ModRepository.SaveGroups(game, GetGroups(game));
+    }
+
+    public void RenameMod(GameProfile game, ModRecord mod, string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new InvalidOperationException("MOD 名称不能为空");
+        }
+
+        mod.DisplayName = name.Trim();
+        ModRepository.Save(game, mod);
     }
 
     public void DeleteGroup(GameProfile game, ModGroup group)
@@ -794,6 +981,136 @@ public sealed class ModService
         {
             Directory.Delete(dir);
         }
+    }
+
+    private List<ParsedMod> SplitImportUnits(GameProfile game, string sourcePath, string staging)
+    {
+        var root = ArchiveExtractor.UnwrapRoot(staging);
+        var candidates = DiscoverImportCandidates(root);
+        if (LooksLikeSinglePackage(root) || candidates.Count <= 1)
+        {
+            ArchiveExtractor.ExtractNested(staging);
+            return [ParseUnit(game, sourcePath, staging, "")];
+        }
+
+        var units = new List<ParsedMod>();
+        foreach (var candidate in candidates)
+        {
+            var childStaging = Path.Combine(AppPaths.TempDir, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(childStaging);
+            if (Directory.Exists(candidate))
+            {
+                CopyDirectory(candidate, childStaging);
+            }
+            else
+            {
+                File.Copy(candidate, Path.Combine(childStaging, Path.GetFileName(candidate)), true);
+            }
+
+            ArchiveExtractor.ExtractNested(childStaging);
+            var parsed = TryParseUnit(game, sourcePath, childStaging, UnitName(candidate));
+            if (parsed is not null)
+            {
+                units.Add(parsed);
+            }
+            else
+            {
+                TryDelete(childStaging);
+            }
+        }
+
+        if (units.Count <= 1)
+        {
+            foreach (var parsed in units)
+            {
+                TryDelete(parsed.StagingDir);
+            }
+
+            ArchiveExtractor.ExtractNested(staging);
+            return [ParseUnit(game, sourcePath, staging, "")];
+        }
+
+        TryDelete(staging);
+        return units;
+    }
+
+    private static readonly string[] DeployRootNames =
+    [
+        "nativePC", "natives", "reframework", "autorun", "plugins",
+        "pl", "wp", "weapon", "player", "art", "gamedesign"
+    ];
+
+    private static bool LooksLikeSinglePackage(string root)
+    {
+        if (Directory.GetFiles(root, "ModuleConfig.xml", SearchOption.AllDirectories).Length > 0)
+        {
+            return true;
+        }
+
+        if (Directory.GetDirectories(root).Any(dir =>
+                DeployRootNames.Contains(Path.GetFileName(dir), StringComparer.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return Directory.GetFiles(root, "*.pak", SearchOption.TopDirectoryOnly).Length > 0;
+    }
+
+    private static List<string> DiscoverImportCandidates(string root)
+    {
+        var files = Directory.GetFiles(root, "*", SearchOption.TopDirectoryOnly);
+        var dirs = Directory.GetDirectories(root);
+        var archives = files.Where(ArchiveExtractor.IsArchive).ToList();
+        var candidates = new List<string>();
+        candidates.AddRange(dirs);
+        candidates.AddRange(archives);
+        return candidates
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static ParsedMod ParseUnit(GameProfile game, string sourcePath, string staging, string name)
+    {
+        var parsed = ModLayoutParser.Parse(game, sourcePath, staging);
+        if (parsed.Files.Count == 0)
+        {
+            TryDelete(staging);
+            throw new InvalidOperationException("未能识别这个 MOD 的文件结构");
+        }
+
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            parsed.Name = name;
+        }
+
+        return parsed;
+    }
+
+    private static ParsedMod? TryParseUnit(GameProfile game, string sourcePath, string staging, string name)
+    {
+        try
+        {
+            return ParseUnit(game, sourcePath, staging, name);
+        }
+        catch
+        {
+            TryDelete(staging);
+            return null;
+        }
+    }
+
+    private static string BundleName(string path) =>
+        Directory.Exists(path)
+            ? Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            : Path.GetFileNameWithoutExtension(path);
+
+    private static string UnitName(string path)
+    {
+        var name = Directory.Exists(path)
+            ? Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            : Path.GetFileNameWithoutExtension(path);
+        var parsed = NexusNames.ParseNexusStem(name);
+        return parsed?.Name ?? name;
     }
 
     private static void CopyDirectory(string source, string dest)

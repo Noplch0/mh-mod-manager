@@ -106,10 +106,9 @@ app.MapPost("/api/games/{gameId}/import", (GameId gameId, ImportRequest body) =>
             var label = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
             try
             {
-                var parsed = service.ParseImport(game, path);
-                var installed = service.Install(game, parsed);
-                lastName = installed.DisplayName;
-                imported++;
+                var batch = service.Import(game, path);
+                imported += batch.Mods.Count;
+                lastName = batch.Group?.Name ?? batch.Mods.LastOrDefault()?.DisplayName;
             }
             catch (Exception ex)
             {
@@ -137,6 +136,28 @@ app.MapPost("/api/games/{gameId}/mods/{modId}/move", (GameId gameId, int modId, 
     {
         service.Move(game, RequireMod(service, game, modId), body.Delta);
         return "MOD 优先级已更新";
+    }));
+
+app.MapPatch("/api/games/{gameId}/mods/{modId}", (GameId gameId, int modId, NameRequest body) =>
+    Mutate(gameId, service, settings, gate, game =>
+    {
+        service.RenameMod(game, RequireMod(service, game, modId), body.Name ?? "");
+        return "MOD 已重命名";
+    }));
+
+app.MapPost("/api/games/{gameId}/mods/{modId}/update", (GameId gameId, int modId, ImportRequest body) =>
+    Mutate(gameId, service, settings, gate, game =>
+    {
+        var path = (body.Paths ?? []).FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException("请选择要更新的压缩包");
+        }
+
+        var batch = service.Update(game, RequireMod(service, game, modId), path);
+        return batch.Group is not null
+            ? $"已用合集替换，导入 {batch.Mods.Count} 个 MOD 到 {batch.Group.Name}"
+            : $"已更新 {batch.Mods[0].DisplayName}";
     }));
 
 app.MapPost("/api/games/{gameId}/mods/{modId}/group", (GameId gameId, int modId, GroupIdRequest body) =>
@@ -294,15 +315,10 @@ static List<string> ExpandImportPaths(IEnumerable<string> paths)
             continue;
         }
 
-        if (!Directory.Exists(path))
+        if (Directory.Exists(path))
         {
-            continue;
+            files.Add(path);
         }
-
-        var archives = Directory.GetFiles(path, "*", SearchOption.TopDirectoryOnly)
-            .Where(ArchiveExtractor.IsArchive)
-            .ToList();
-        files.AddRange(archives.Count > 0 ? archives : [path]);
     }
 
     return files.Distinct(StringComparer.OrdinalIgnoreCase).ToList();

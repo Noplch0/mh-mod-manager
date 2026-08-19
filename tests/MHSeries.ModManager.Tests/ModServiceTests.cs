@@ -171,6 +171,92 @@ public sealed class ModServiceTests : IDisposable
     }
 
     [Fact]
+    public void RenameModUpdatesDisplayName()
+    {
+        var mod = _service.Install(_game, CreateParsed("old-name", "data"));
+        _service.RenameMod(_game, mod, "自定义名称");
+
+        Assert.Equal("自定义名称", mod.DisplayName);
+        var reloaded = JsonUtil.Load(Path.Combine(AppPaths.ModDir(_appId, mod.Id), "info.json"), new ModRecord());
+        Assert.Equal("自定义名称", reloaded.DisplayName);
+    }
+
+    [Fact]
+    public void BundleWithIndependentFoldersCreatesAGroup()
+    {
+        var bundle = Path.Combine(_root, "Item Duration Mod - All-in-One.rar");
+        Directory.CreateDirectory(bundle);
+        WriteFile(bundle, "Duration 30/nativePC/one.bin", "one");
+        WriteFile(bundle, "Duration 60/nativePC/two.bin", "two");
+        WriteFile(bundle, "Duration 90/nativePC/three.bin", "three");
+
+        var result = _service.Import(_game, bundle);
+
+        Assert.NotNull(result.Group);
+        Assert.Equal("Item Duration Mod - All-in-One.rar", result.Group!.Name);
+        Assert.Equal(3, result.Mods.Count);
+        Assert.All(result.Mods, mod => Assert.Equal(result.Group.Id, mod.GroupId));
+        Assert.Contains(result.Mods, mod => mod.DisplayName == "Duration 30");
+        Assert.Contains(result.Mods, mod => mod.DisplayName == "Duration 60");
+        Assert.Contains(result.Mods, mod => mod.DisplayName == "Duration 90");
+    }
+
+    [Fact]
+    public void SingleModArchiveDoesNotCreateAGroup()
+    {
+        var archive = Path.Combine(_root, "single-mod");
+        Directory.CreateDirectory(archive);
+        WriteFile(archive, "nativePC/shared.bin", "one");
+
+        var result = _service.Import(_game, archive);
+
+        Assert.Null(result.Group);
+        Assert.Single(result.Mods);
+        Assert.Equal(_service.GetGroups(_game).First(group => group.IsDefault).Id, result.Mods[0].GroupId);
+    }
+
+    [Fact]
+    public void UpdateSingleArchiveReplacesFilesAndKeepsIdentity()
+    {
+        var original = _service.Install(_game, CreateParsed("old", "old-data"));
+        _service.RenameMod(_game, original, "自定义名称");
+        var replacement = Path.Combine(_root, "updated-mod");
+        Directory.CreateDirectory(replacement);
+        WriteFile(replacement, "nativePC/shared.bin", "new-data");
+        WriteFile(replacement, "nativePC/extra.bin", "extra");
+
+        var result = _service.Update(_game, original, replacement);
+
+        Assert.Null(result.Group);
+        Assert.Equal(original.Id, result.Mods[0].Id);
+        Assert.Equal("自定义名称", original.DisplayName);
+        Assert.Equal(original.GroupId, result.Mods[0].GroupId);
+        var filesDir = AppPaths.ModFilesDir(_appId, original.Id);
+        Assert.Equal("new-data", File.ReadAllText(Path.Combine(filesDir, "nativePC", "shared.bin")));
+        Assert.True(File.Exists(Path.Combine(filesDir, "nativePC", "extra.bin")));
+    }
+
+    [Fact]
+    public void UpdateBundleRemovesOriginalAndCreatesGroup()
+    {
+        var original = _service.Install(_game, CreateParsed("old", "old-data"));
+        var bundle = Path.Combine(_root, "Combo Pack");
+        Directory.CreateDirectory(bundle);
+        WriteFile(bundle, "Alpha/nativePC/a.bin", "a");
+        WriteFile(bundle, "Beta/nativePC/b.bin", "b");
+
+        var result = _service.Update(_game, original, bundle);
+
+        Assert.NotNull(result.Group);
+        Assert.Equal("Combo Pack", result.Group!.Name);
+        Assert.Equal(2, result.Mods.Count);
+        Assert.DoesNotContain(_service.GetMods(_game), item => item.DisplayName == "old");
+        Assert.Contains(result.Mods, mod => mod.DisplayName == "Alpha");
+        Assert.Contains(result.Mods, mod => mod.DisplayName == "Beta");
+        Assert.All(result.Mods, mod => Assert.Equal(result.Group.Id, mod.GroupId));
+    }
+
+    [Fact]
     public void DeletingAGroupMovesModsBackToDefault()
     {
         var mod = _service.Install(_game, CreateParsed("orphan", "data"));

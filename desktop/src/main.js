@@ -12,7 +12,8 @@ const state = {
   activeId: null,
   pane: "info",
   moveTarget: 0,
-  renameDrafts: {}
+  renameDrafts: {},
+  modRenameDrafts: {}
 };
 
 const app = document.querySelector("#app");
@@ -47,6 +48,12 @@ function applyWorkspace(data, status) {
   if (state.activeId && !ids.has(state.activeId)) {
     state.activeId = null;
     if (state.pane === "mod") state.pane = "info";
+  }
+  for (const id of Object.keys(state.modRenameDrafts)) {
+    const mod = state.mods.find(item => item.id === Number(id));
+    if (!mod || mod.name === state.modRenameDrafts[id]) {
+      delete state.modRenameDrafts[id];
+    }
   }
 }
 
@@ -162,6 +169,7 @@ function render() {
               <button class="btn" data-action="refresh" ${state.busy ? "disabled" : ""}>刷新</button>
               <button class="btn" data-action="create-group" ${state.busy ? "disabled" : ""}>新建分组</button>
               <button class="btn" data-action="open-settings">设置</button>
+              <button class="btn" data-action="open-folder" ${!game?.path || state.busy ? "disabled" : ""}>打开目录</button>
               <button class="btn" data-action="launch" ${!game?.installed || state.busy ? "disabled" : ""}>启动游戏</button>
               <button class="primary" data-action="import" ${state.busy ? "disabled" : ""}>批量导入</button>
             </div>
@@ -211,7 +219,7 @@ function render() {
                       <input type="checkbox" data-role="select-mod" data-id="${mod.id}" ${state.selectedIds.has(mod.id) ? "checked" : ""} />
                       <div class="thumb">${mod.hasPreview ? `<img src="${esc(previewSrc(mod))}" alt="" />` : esc(mod.category)}</div>
                       <div class="meta">
-                        <div class="name">${esc(mod.name)}</div>
+                        <input class="name" data-role="mod-name" data-id="${mod.id}" value="${esc(state.modRenameDrafts[mod.id] ?? mod.name)}" />
                         <div class="sub">
                           <span class="muted">${esc(mod.version)}</span>
                           <span class="muted">${mod.fileCount} 个文件</span>
@@ -223,6 +231,7 @@ function render() {
                       <div class="row-actions">
                         <button class="icon" data-action="mod-up" data-id="${mod.id}">↑</button>
                         <button class="icon" data-action="mod-down" data-id="${mod.id}">↓</button>
+                        <button class="icon" data-action="update-mod" data-id="${mod.id}" title="更新 MOD">↻</button>
                         <button class="icon" data-action="uninstall" data-id="${mod.id}">⌫</button>
                         <button class="${switchClass(mod.enabled)}" data-action="mod-enable" data-id="${mod.id}" data-on="${mod.enabled}"></button>
                       </div>
@@ -238,7 +247,10 @@ function render() {
             <div class="field">
               <span>游戏目录</span>
               <div class="muted">${esc(game?.path || "未设置游戏目录")}</div>
-              <button class="btn" data-action="pick-game" style="width:max-content">选择目录</button>
+              <div class="actions">
+                <button class="btn" data-action="pick-game">选择目录</button>
+                <button class="btn" data-action="open-folder" ${game?.path ? "" : "disabled"}>打开目录</button>
+              </div>
             </div>
             <div class="field">
               <span>部署行为</span>
@@ -294,6 +306,7 @@ function render() {
 }
 
 function onClick(event) {
+  if (event.target.closest("select, option, input, textarea, label")) return;
   const target = event.target.closest("[data-action]");
   if (!target || !state.game) return;
   event.stopPropagation();
@@ -354,6 +367,10 @@ function onClick(event) {
     pickGame();
     return;
   }
+  if (action === "open-folder") {
+    openGameFolder();
+    return;
+  }
   if (action === "clean") {
     run(() => request(`/api/games/${gameId}/clean`, { method: "POST" }));
     return;
@@ -398,6 +415,10 @@ function onClick(event) {
     }));
     return;
   }
+  if (action === "update-mod") {
+    updateMod(id);
+    return;
+  }
   if (action === "uninstall") {
     run(() => request(`/api/games/${gameId}/mods/${id}`, { method: "DELETE" }));
     return;
@@ -418,6 +439,10 @@ function onInput(event) {
   }
   if (event.target.dataset.role === "group-name") {
     state.renameDrafts[Number(event.target.dataset.id)] = event.target.value;
+    return;
+  }
+  if (event.target.dataset.role === "mod-name") {
+    state.modRenameDrafts[Number(event.target.dataset.id)] = event.target.value;
   }
 }
 
@@ -429,6 +454,14 @@ function onChange(event) {
   }
   if (target.dataset.role === "group-name" && state.game) {
     run(() => request(`/api/games/${state.game.id}/groups/${target.dataset.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: target.value })
+    }));
+    return;
+  }
+  if (target.dataset.role === "mod-name" && state.game) {
+    const id = Number(target.dataset.id);
+    run(() => request(`/api/games/${state.game.id}/mods/${id}`, {
       method: "PATCH",
       body: JSON.stringify({ name: target.value })
     }));
@@ -467,6 +500,16 @@ async function saveSettings() {
   });
 }
 
+async function updateMod(id) {
+  const path = window.huntforge?.pickUpdate ? await window.huntforge.pickUpdate() : "";
+  if (!path) return;
+  state.status = "正在更新 MOD...";
+  await run(() => request(`/api/games/${state.game.id}/mods/${id}/update`, {
+    method: "POST",
+    body: JSON.stringify({ paths: [path] })
+  }), "更新失败");
+}
+
 async function importMods(paths) {
   const picked = paths ?? (window.huntforge ? await window.huntforge.pickMods() : []);
   if (!picked?.length) return;
@@ -484,6 +527,23 @@ async function pickGame() {
     method: "PUT",
     body: JSON.stringify({ path: folder })
   }));
+}
+
+async function openGameFolder() {
+  const folder = state.game?.path;
+  if (!folder) {
+    state.status = "未设置游戏目录";
+    render();
+    return;
+  }
+  if (!window.huntforge?.openPath) {
+    state.status = "当前环境无法打开文件夹";
+    render();
+    return;
+  }
+  const error = await window.huntforge.openPath(folder);
+  state.status = error ? `无法打开目录: ${error}` : "已打开游戏目录";
+  render();
 }
 
 function setupDrop() {

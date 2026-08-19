@@ -20,3 +20,9 @@ public sealed class ParsedFile
     public string SourcePath { get; set; } = "";
     public string RelativeDest { get; set; } = "";
 }
+
+public sealed class ImportBatch
+{
+    public List<ModRecord> Mods { get; set; } = [];
+    public ModGroup? Group { get; set; }
+}

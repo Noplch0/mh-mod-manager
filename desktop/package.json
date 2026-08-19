@@ -1,5 +1,6 @@
 {
   "name": "huntforge",
+  "productName": "HuntForge",
   "version": "1.0.0",
   "private": true,
   "main": "electron/main.cjs",
@@ -7,16 +8,52 @@
     "dev": "concurrently -k \"npm:ui\" \"npm:app\"",
     "ui": "vite",
     "app": "wait-on http://127.0.0.1:5173 && electron .",
-    "start": "npm run dev"
+    "start": "npm run dev",
+    "build:ui": "vite build",
+    "build:host": "dotnet publish ../src/HuntForge.Host/HuntForge.Host.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=none -p:DebugSymbols=false",
+    "pack": "npm run build:host && npm run build:ui && electron-builder --win dir"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
     "electron": "^37.2.6",
+    "electron-builder": "^26.15.3",
     "vite": "^7.1.3",
     "wait-on": "^8.0.4"
   },
   "allowScripts": {
     "electron@37.10.3": true,
-    "esbuild@0.28.2": true
+    "esbuild@0.28.2": true,
+    "electron-winstaller@5.4.0": true
+  },
+  "build": {
+    "appId": "com.huntforge.app",
+    "productName": "HuntForge",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../src/HuntForge.Host/bin/Release/net9.0-windows/win-x64/publish",
+        "to": "host",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
   }
 }

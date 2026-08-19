@@ -7,4 +7,5 @@ dist/
 *.suo
 node_modules/
 desktop/dist/
+desktop/release/
 狩技MOD盒子.exe
