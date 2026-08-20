@@ -20,3 +20,11 @@ npm start
 ```
 
 首次进入游戏时可在设置里选择安装目录，也可以由 Steam 注册表和 `libraryfolders.vdf` 自动探测。导入支持 `.zip`、`.7z`、`.rar`，可多选或拖放到窗口。
+
+## 发布
+
+```powershell
+.\publish.ps1
+```
+
+会生成目录版程序 `dist\HuntForge\HuntForge.exe`（自包含 .NET 后端，不是单文件 exe）。直接运行即可，数据目录在 exe 旁边的 `data\`。
