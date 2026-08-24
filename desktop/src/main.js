@@ -34,12 +34,21 @@ async function request(path, options = {}) {
 }
 
 function applyWorkspace(data, status) {
+  const nextGameId = data.game?.id;
+  const gameChanged = Boolean(nextGameId && state.game?.id && nextGameId !== state.game.id);
   if (data.game) state.game = data.game;
   if (data.settings) state.settings = data.settings;
   if (data.groups) state.groups = data.groups;
   if (data.mods) state.mods = data.mods;
   if (data.games) state.games = data.games;
   state.status = status ?? data.status ?? state.status;
+  if (gameChanged) {
+    state.renameDrafts = {};
+    state.modRenameDrafts = {};
+    state.selectedIds = new Set();
+    state.activeId = null;
+    if (state.pane === "mod") state.pane = "info";
+  }
   if (!state.groups.some(group => group.id === state.moveTarget)) {
     state.moveTarget = state.groups[0]?.id ?? 0;
   }
@@ -48,6 +57,12 @@ function applyWorkspace(data, status) {
   if (state.activeId && !ids.has(state.activeId)) {
     state.activeId = null;
     if (state.pane === "mod") state.pane = "info";
+  }
+  for (const id of Object.keys(state.renameDrafts)) {
+    const group = state.groups.find(item => item.id === Number(id));
+    if (!group || group.name === state.renameDrafts[id]) {
+      delete state.renameDrafts[id];
+    }
   }
   for (const id of Object.keys(state.modRenameDrafts)) {
     const mod = state.mods.find(item => item.id === Number(id));
@@ -125,6 +140,9 @@ function render() {
   const selected = selectedMods();
   const active = activeMod();
   const pane = state.pane === "settings" ? "settings" : active && state.pane === "mod" ? "mod" : "info";
+  const list = app.querySelector(".list");
+  const listScrollTop = list?.scrollTop ?? 0;
+  const listScrollLeft = list?.scrollLeft ?? 0;
   const searchFocus = document.activeElement?.id === "search";
   const searchPos = searchFocus ? document.activeElement.selectionStart : null;
   app.innerHTML = `
@@ -171,7 +189,7 @@ function render() {
               <button class="btn" data-action="open-settings">设置</button>
               <button class="btn" data-action="open-folder" ${!game?.path || state.busy ? "disabled" : ""}>打开目录</button>
               <button class="btn" data-action="launch" ${!game?.installed || state.busy ? "disabled" : ""}>启动游戏</button>
-              <button class="primary" data-action="import" ${state.busy ? "disabled" : ""}>批量导入</button>
+              <button class="primary" data-action="import" ${state.busy ? "disabled" : ""}>导入</button>
             </div>
           </div>
           <div class="searchrow">
@@ -231,8 +249,6 @@ function render() {
                       <div class="row-actions">
                         <button class="icon" data-action="mod-up" data-id="${mod.id}">↑</button>
                         <button class="icon" data-action="mod-down" data-id="${mod.id}">↓</button>
-                        <button class="icon" data-action="update-mod" data-id="${mod.id}" title="更新 MOD">↻</button>
-                        <button class="icon" data-action="uninstall" data-id="${mod.id}">⌫</button>
                         <button class="${switchClass(mod.enabled)}" data-action="mod-enable" data-id="${mod.id}" data-on="${mod.enabled}"></button>
                       </div>
                     </article>`).join("") || '<div class="empty">这个分组还没有 MOD</div>'}</div>` : ""}
@@ -270,15 +286,20 @@ function render() {
             <div class="eyebrow">MOD PREVIEW</div>
             <h2 class="h1" style="font-size:21px;margin:8px 0 0">${esc(active.name)}</h2>
             <div class="preview-box">${active.hasPreview ? `<img src="${esc(previewSrc(active))}" alt="" />` : '<span class="muted">没有预览图</span>'}</div>
-            <div class="card">
-              <div class="kv"><span class="muted">类型</span><span style="color:var(--gold)">${esc(active.category)}</span></div>
-              <div class="kv"><span class="muted">版本</span><span>${esc(active.version)}</span></div>
+             <div class="card">
+               <div class="kv"><span class="muted">类型</span><span style="color:var(--gold)">${esc(active.category)}</span></div>
+               <div class="kv"><span class="muted">版本</span><span>${esc(active.version)}</span></div>
               <div class="kv"><span class="muted">作者</span><span>${esc(active.author)}</span></div>
               <div class="kv"><span class="muted">文件</span><span>${active.fileCount} 个文件</span></div>
               <div class="kv"><span class="muted">分组</span><span>${esc(active.groupName)}</span></div>
-              <div class="kv"><span class="muted">导入时间</span><span>${esc(active.installedAt)}</span></div>
-            </div>
-          ` : `
+               <div class="kv"><span class="muted">导入时间</span><span>${esc(active.installedAt)}</span></div>
+             </div>
+             <div class="actions mod-tools">
+               <button class="primary" data-action="update-mod" data-id="${active.id}" ${state.busy ? "disabled" : ""}>↻ 更新 MOD</button>
+               <button class="btn" data-action="open-mod-folder" data-id="${active.id}" ${state.busy ? "disabled" : ""}>▣ 查看文件</button>
+               <button class="btn danger" data-action="uninstall" data-id="${active.id}" title="删除 MOD" ${state.busy ? "disabled" : ""}><svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><span>删除 MOD</span></button>
+             </div>
+           ` : `
             <div class="eyebrow">WORKSPACE</div>
             <h2 class="h1" style="font-size:21px;margin:8px 0 16px">当前工作区</h2>
             <div class="card">
@@ -298,6 +319,11 @@ function render() {
       <div class="dropmask" id="dropmask"><div class="dropcard">松开以批量导入 MOD</div></div>
     </div>
   `;
+  const nextList = app.querySelector(".list");
+  if (nextList) {
+    nextList.scrollTop = listScrollTop;
+    nextList.scrollLeft = listScrollLeft;
+  }
   if (searchFocus) {
     const input = app.querySelector("#search");
     input?.focus();
@@ -369,6 +395,10 @@ function onClick(event) {
   }
   if (action === "open-folder") {
     openGameFolder();
+    return;
+  }
+  if (action === "open-mod-folder") {
+    openModFolder(id);
     return;
   }
   if (action === "clean") {
@@ -543,6 +573,23 @@ async function openGameFolder() {
   }
   const error = await window.huntforge.openPath(folder);
   state.status = error ? `无法打开目录: ${error}` : "已打开游戏目录";
+  render();
+}
+
+async function openModFolder(id) {
+  if (!window.huntforge?.openPath || !state.game) {
+    state.status = "当前环境无法打开文件夹";
+    render();
+    return;
+  }
+
+  try {
+    const result = await request(`/api/games/${state.game.id}/mods/${id}/folder`);
+    const error = await window.huntforge.openPath(result.path);
+    state.status = error ? `无法打开 MOD 文件夹: ${error}` : "已打开 MOD 文件夹";
+  } catch (error) {
+    state.status = error.message || "无法打开 MOD 文件夹";
+  }
   render();
 }
 

@@ -557,6 +557,8 @@ public sealed class ModService
             return;
         }
 
+        var requiresRedeploy = moving.Any(item => item.Enabled);
+
         var mods = GetMods(game);
         var members = mods.Where(item => item.GroupId == groupId && !moving.Contains(item)).ToList();
         var nextIndex = members.Count == 0 ? 1 : members.Max(item => item.Index) + 1;
@@ -568,7 +570,10 @@ public sealed class ModService
         }
 
         ModRepository.FixIndex(game, mods, groups);
-        RedeployIfNeeded(game, mods);
+        if (requiresRedeploy)
+        {
+            RedeployIfNeeded(game, mods);
+        }
     }
 
     public void SetGroupCollapsed(GameProfile game, ModGroup group, bool collapsed)

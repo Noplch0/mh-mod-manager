@@ -49,6 +49,7 @@
     "compression": "store",
     "win": {
       "signAndEditExecutable": false,
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "dir",

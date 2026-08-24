@@ -136,6 +136,22 @@ public sealed class ModServiceTests : IDisposable
     }
 
     [Fact]
+    public void MovingDisabledModDoesNotRedeployEnabledMods()
+    {
+        var destination = WriteFile(_root, "nativePC/shared.bin", "original");
+        var enabled = _service.Install(_game, CreateParsed("enabled", "enabled-data"));
+        var disabled = _service.Install(_game, CreateParsed("disabled", "disabled-data"));
+        var group = _service.CreateGroup(_game, "外观");
+        _service.SetEnabled(_game, enabled, true);
+        File.SetLastWriteTimeUtc(destination, DateTime.UtcNow.AddMinutes(-1));
+        var deployedAt = File.GetLastWriteTimeUtc(destination);
+
+        _service.MoveModToGroup(_game, disabled, group.Id);
+
+        Assert.Equal(deployedAt, File.GetLastWriteTimeUtc(destination));
+    }
+
+    [Fact]
     public void GroupCollapseIsPersisted()
     {
         var group = _service.CreateGroup(_game, "折叠");

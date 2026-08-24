@@ -272,6 +272,19 @@ app.MapGet("/api/games/{gameId}/mods/{modId}/preview", (GameId gameId, int modId
     }
 });
 
+app.MapGet("/api/games/{gameId}/mods/{modId}/folder", (GameId gameId, int modId) =>
+{
+    lock (gate)
+    {
+        var game = GameProfile.Get(gameId);
+        var mod = RequireMod(service, game, modId);
+        var path = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
+        return Directory.Exists(path)
+            ? Results.Json(new { path })
+            : Results.NotFound();
+    }
+});
+
 app.Run();
 
 static IResult Mutate(GameId gameId, ModService service, SettingsStore settings, object gate, Func<GameProfile, string> action)
