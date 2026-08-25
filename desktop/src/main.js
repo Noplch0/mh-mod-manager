@@ -228,7 +228,7 @@ function render() {
                     <div class="row-actions">
                       <button class="icon" data-action="group-up" data-id="${group.id}">↑</button>
                       <button class="icon" data-action="group-down" data-id="${group.id}">↓</button>
-                      ${group.isDefault ? "" : `<button class="icon" data-action="delete-group" data-id="${group.id}">⌫</button>`}
+                      ${group.isDefault ? "" : `<button class="icon" data-action="delete-group" data-id="${group.id}" title="删除分组" aria-label="删除分组"><svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>`}
                       <button class="${switchClass(group.totalCount > 0 && group.enabledCount === group.totalCount)}" data-action="group-enable" data-id="${group.id}" data-on="${group.totalCount > 0 && group.enabledCount === group.totalCount}"></button>
                     </div>
                   </div>

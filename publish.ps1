@@ -3,6 +3,7 @@ Set-Location -LiteralPath $PSScriptRoot
 
 $desktop = Join-Path $PSScriptRoot "desktop"
 $outDir = Join-Path $PSScriptRoot "dist\HuntForge"
+$zipPath = Join-Path $PSScriptRoot "dist\HuntForge.zip"
 $hostPublish = Join-Path $PSScriptRoot "src\HuntForge.Host\bin\Release\net9.0-windows\win-x64\publish"
 $uiDist = Join-Path $desktop "dist"
 $electronDist = Join-Path $desktop "node_modules\electron\dist"
@@ -63,7 +64,7 @@ npx vite build
 if (-not $?) { Pop-Location; throw "ui build failed" }
 Pop-Location
 
-Write-Host "4/4 assemble app folder"
+Write-Host "4/4 assemble and compress app"
 if (Test-Path -LiteralPath $outDir) {
     Remove-Item -LiteralPath $outDir -Recurse -Force
 }
@@ -77,8 +78,10 @@ if (Test-Path -LiteralPath $defaultApp) {
 $appDir = Join-Path $outDir "resources\app"
 New-Item -ItemType Directory -Force -Path (Join-Path $appDir "electron") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $appDir "dist") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $appDir "build") | Out-Null
 Copy-Item -Path (Join-Path $desktop "electron\*") -Destination (Join-Path $appDir "electron") -Recurse -Force
 Copy-Item -Path (Join-Path $uiDist "*") -Destination (Join-Path $appDir "dist") -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $desktop "build\icon.ico") -Destination (Join-Path $appDir "build\icon.ico") -Force
 @'
 {
   "name": "huntforge",
@@ -101,6 +104,18 @@ if (-not (Test-Path -LiteralPath $appExe)) {
     throw "HuntForge.exe not found"
 }
 
+if (Test-Path -LiteralPath $zipPath) {
+    Remove-Item -LiteralPath $zipPath -Force
+}
+Compress-Archive -Path $outDir -DestinationPath $zipPath -CompressionLevel Optimal
+if (-not (Test-Path -LiteralPath $zipPath)) {
+    throw "ZIP archive was not created"
+}
+
+Remove-Item -LiteralPath $outDir -Recurse -Force
+Remove-Item -LiteralPath $uiDist -Recurse -Force
+Remove-Item -LiteralPath $hostPublish -Recurse -Force
+
 Write-Host ""
-Write-Host "Done (folder build, not single-file exe)"
-Write-Host $appExe
+Write-Host "Done (ZIP archive)"
+Write-Host $zipPath

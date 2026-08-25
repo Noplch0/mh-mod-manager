@@ -34,6 +34,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "build/icon.ico",
       "package.json"
     ],
     "extraResources": [
@@ -48,7 +49,7 @@
     "asar": true,
     "compression": "store",
     "win": {
-      "signAndEditExecutable": false,
+      "signExecutable": false,
       "icon": "build/icon.ico",
       "target": [
         {
