@@ -1,10 +1,53 @@
 $ErrorActionPreference = "Stop"
 Set-Location -LiteralPath $PSScriptRoot
 
+function Get-GitTagVersion {
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if (-not $git) {
+        throw "git not found. Install Git and add it to PATH."
+    }
+
+    $raw = ""
+    try {
+        $raw = (git -C $PSScriptRoot describe --tags --abbrev=0 2>$null | Select-Object -First 1)
+    } catch {
+        $raw = ""
+    }
+    if (-not $raw) {
+        $raw = (git -C $PSScriptRoot tag --list --sort=-v:refname | Select-Object -First 1)
+    }
+    if (-not $raw) {
+        Write-Host "No git tag found, using 0.0.0. Create one with: git tag v1.0.0" -ForegroundColor Yellow
+        return "0.0.0"
+    }
+
+    $version = $raw.ToString().Trim() -replace "^v", ""
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        throw "git tag is empty."
+    }
+    return $version
+}
+
+function Get-AssemblyVersion([string] $version) {
+    if ($version -match "^\d+\.\d+(?:\.\d+)?(?:\.\d+)?") {
+        $parts = $Matches[0].Split(".")
+        while ($parts.Length -lt 3) {
+            $parts += "0"
+        }
+        return [string]::Join(".", $parts[0..2])
+    }
+    return "0.0.0"
+}
+
+$version = Get-GitTagVersion
+$assemblyVersion = Get-AssemblyVersion $version
+Write-Host "Git tag version: $version"
+
 $desktop = Join-Path $PSScriptRoot "desktop"
-$outDir = Join-Path $PSScriptRoot "dist\HuntForge"
-$zipPath = Join-Path $PSScriptRoot "dist\HuntForge.zip"
-$hostPublish = Join-Path $PSScriptRoot "src\HuntForge.Host\bin\Release\net9.0-windows\win-x64\publish"
+$distRoot = Join-Path $PSScriptRoot "dist"
+$outDir = Join-Path $distRoot "mh-mod-manager"
+$zipPath = Join-Path $distRoot "mh-mod-manager-$version.zip"
+$hostPublish = Join-Path $PSScriptRoot "src\mh-mod-manager.Host\bin\Release\net9.0-windows\win-x64\publish"
 $uiDist = Join-Path $desktop "dist"
 $electronDist = Join-Path $desktop "node_modules\electron\dist"
 
@@ -17,16 +60,16 @@ if (-not (Test-Path -LiteralPath (Join-Path $desktop "node_modules"))) {
 $electronExe = Join-Path $desktop "node_modules\electron\dist\electron.exe"
 if (-not (Test-Path -LiteralPath $electronExe)) {
     Write-Host "download electron runtime"
-    $version = "37.10.3"
+    $electronVersion = "37.10.3"
     $pkg = Join-Path $desktop "node_modules\electron\package.json"
     if (Test-Path -LiteralPath $pkg) {
-        $version = (Get-Content -LiteralPath $pkg -Raw | ConvertFrom-Json).version
+        $electronVersion = (Get-Content -LiteralPath $pkg -Raw | ConvertFrom-Json).version
     }
-    $zip = Join-Path $env:TEMP "electron-v$version-win32-x64.zip"
+    $zip = Join-Path $env:TEMP "electron-v$electronVersion-win32-x64.zip"
     $urls = @(
-        "https://npmmirror.com/mirrors/electron/$version/electron-v$version-win32-x64.zip",
-        "https://cdn.npmmirror.com/binaries/electron/v$version/electron-v$version-win32-x64.zip",
-        "https://github.com/electron/electron/releases/download/v$version/electron-v$version-win32-x64.zip"
+        "https://npmmirror.com/mirrors/electron/$electronVersion/electron-v$electronVersion-win32-x64.zip",
+        "https://cdn.npmmirror.com/binaries/electron/v$electronVersion/electron-v$electronVersion-win32-x64.zip",
+        "https://github.com/electron/electron/releases/download/v$electronVersion/electron-v$electronVersion-win32-x64.zip"
     )
     $downloaded = $false
     foreach ($url in $urls) {
@@ -38,11 +81,10 @@ if (-not (Test-Path -LiteralPath $electronExe)) {
         }
     }
     if (-not $downloaded) { Pop-Location; throw "electron download failed" }
-    $dist = Join-Path $desktop "node_modules\electron\dist"
-    if (Test-Path -LiteralPath $dist) {
-        Remove-Item -LiteralPath $dist -Recurse -Force
+    if (Test-Path -LiteralPath $electronDist) {
+        Remove-Item -LiteralPath $electronDist -Recurse -Force
     }
-    Expand-Archive -LiteralPath $zip -DestinationPath $dist -Force
+    Expand-Archive -LiteralPath $zip -DestinationPath $electronDist -Force
 }
 Pop-Location
 if (-not (Test-Path -LiteralPath $electronExe)) {
@@ -50,12 +92,14 @@ if (-not (Test-Path -LiteralPath $electronExe)) {
 }
 
 Write-Host "2/4 publish host (self-contained, not single-file)"
-dotnet publish (Join-Path $PSScriptRoot "src\HuntForge.Host\HuntForge.Host.csproj") `
+dotnet publish (Join-Path $PSScriptRoot "src\mh-mod-manager.Host\mh-mod-manager.Host.csproj") `
     -c Release -r win-x64 --self-contained true `
-    -p:PublishSingleFile=false -p:PublishTrimmed=false -p:DebugType=none -p:DebugSymbols=false
+    -p:PublishSingleFile=false -p:PublishTrimmed=false `
+    -p:DebugType=none -p:DebugSymbols=false `
+    -p:Version=$assemblyVersion -p:InformationalVersion=$version
 if (-not $?) { throw "host publish failed" }
-if (-not (Test-Path -LiteralPath (Join-Path $hostPublish "HuntForge.Host.exe"))) {
-    throw "HuntForge.Host.exe not found"
+if (-not (Test-Path -LiteralPath (Join-Path $hostPublish "mh-mod-manager.Host.exe"))) {
+    throw "mh-mod-manager.Host.exe not found"
 }
 
 Write-Host "3/4 build UI"
@@ -64,7 +108,8 @@ npx vite build
 if (-not $?) { Pop-Location; throw "ui build failed" }
 Pop-Location
 
-Write-Host "4/4 assemble and compress app"
+Write-Host "4/4 assemble app and zip"
+New-Item -ItemType Directory -Force -Path $distRoot | Out-Null
 if (Test-Path -LiteralPath $outDir) {
     Remove-Item -LiteralPath $outDir -Recurse -Force
 }
@@ -82,26 +127,35 @@ New-Item -ItemType Directory -Force -Path (Join-Path $appDir "build") | Out-Null
 Copy-Item -Path (Join-Path $desktop "electron\*") -Destination (Join-Path $appDir "electron") -Recurse -Force
 Copy-Item -Path (Join-Path $uiDist "*") -Destination (Join-Path $appDir "dist") -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $desktop "build\icon.ico") -Destination (Join-Path $appDir "build\icon.ico") -Force
-@'
+$packageJson = @"
 {
-  "name": "huntforge",
-  "version": "1.0.0",
+  "name": "mh-mod-manager",
+  "version": "$version",
   "main": "electron/main.cjs"
 }
-'@ | Set-Content -LiteralPath (Join-Path $appDir "package.json") -Encoding ascii
+"@
+$packageJson | Set-Content -LiteralPath (Join-Path $appDir "package.json") -Encoding ascii
 
 $hostDir = Join-Path $outDir "resources\host"
 New-Item -ItemType Directory -Force -Path $hostDir | Out-Null
 Copy-Item -Path (Join-Path $hostPublish "*") -Destination $hostDir -Recurse -Force
 
-$electronExe = Join-Path $outDir "electron.exe"
-$appExe = Join-Path $outDir "HuntForge.exe"
-if (Test-Path -LiteralPath $electronExe) {
-    Move-Item -LiteralPath $electronExe -Destination $appExe -Force
+$singleFileHint = Join-Path $hostDir "mh-mod-manager.Host.exe"
+if (-not (Test-Path -LiteralPath $singleFileHint)) {
+    throw "mh-mod-manager.Host.exe not found in app host folder"
+}
+$hostDll = Join-Path $hostDir "mh-mod-manager.Host.dll"
+if (-not (Test-Path -LiteralPath $hostDll)) {
+    throw "Publish looks like a single-file exe (mh-mod-manager.Host.dll missing). Keep PublishSingleFile=false."
 }
 
+$outElectron = Join-Path $outDir "electron.exe"
+$appExe = Join-Path $outDir "mh-mod-manager.exe"
+if (Test-Path -LiteralPath $outElectron) {
+    Move-Item -LiteralPath $outElectron -Destination $appExe -Force
+}
 if (-not (Test-Path -LiteralPath $appExe)) {
-    throw "HuntForge.exe not found"
+    throw "mh-mod-manager.exe not found"
 }
 
 if (Test-Path -LiteralPath $zipPath) {
@@ -113,9 +167,15 @@ if (-not (Test-Path -LiteralPath $zipPath)) {
 }
 
 Remove-Item -LiteralPath $outDir -Recurse -Force
-Remove-Item -LiteralPath $uiDist -Recurse -Force
-Remove-Item -LiteralPath $hostPublish -Recurse -Force
+
+if (Test-Path -LiteralPath $uiDist) {
+    Remove-Item -LiteralPath $uiDist -Recurse -Force
+}
+if (Test-Path -LiteralPath $hostPublish) {
+    Remove-Item -LiteralPath $hostPublish -Recurse -Force
+}
 
 Write-Host ""
-Write-Host "Done (ZIP archive)"
-Write-Host $zipPath
+Write-Host "Done"
+Write-Host "Version : $version"
+Write-Host "Zip     : $zipPath"

@@ -1,7 +1,7 @@
 using System.Xml.Linq;
-using HuntForge.Models;
+using MhModManager.Models;
 
-namespace HuntForge.Core;
+namespace MhModManager.Core;
 
 internal static class ModuleConfigParser
 {

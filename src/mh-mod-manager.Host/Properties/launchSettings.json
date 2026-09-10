@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "HuntForge.Host": {
+    "mh-mod-manager.Host": {
       "commandName": "Project",
       "applicationUrl": "http://127.0.0.1:17865",
       "environmentVariables": {

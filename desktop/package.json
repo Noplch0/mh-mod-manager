@@ -1,6 +1,6 @@
 {
-  "name": "huntforge",
-  "productName": "HuntForge",
+  "name": "mh-mod-manager",
+  "productName": "mh-mod-manager",
   "version": "1.0.0",
   "private": true,
   "main": "electron/main.cjs",
@@ -10,7 +10,7 @@
     "app": "wait-on http://127.0.0.1:5173 && electron .",
     "start": "npm run dev",
     "build:ui": "vite build",
-    "build:host": "dotnet publish ../src/HuntForge.Host/HuntForge.Host.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -p:DebugType=none -p:DebugSymbols=false",
+    "build:host": "dotnet publish ../src/mh-mod-manager.Host/mh-mod-manager.Host.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -p:DebugType=none -p:DebugSymbols=false",
     "pack": "npm run build:host && npm run build:ui && electron-builder --win dir"
   },
   "devDependencies": {
@@ -26,8 +26,8 @@
     "electron-winstaller@5.4.0": true
   },
   "build": {
-    "appId": "com.huntforge.app",
-    "productName": "HuntForge",
+    "appId": "com.mh-mod-manager.app",
+    "productName": "mh-mod-manager",
     "directories": {
       "output": "release"
     },
@@ -39,7 +39,7 @@
     ],
     "extraResources": [
       {
-        "from": "../src/HuntForge.Host/bin/Release/net9.0-windows/win-x64/publish",
+        "from": "../src/mh-mod-manager.Host/bin/Release/net9.0-windows/win-x64/publish",
         "to": "host",
         "filter": [
           "**/*"

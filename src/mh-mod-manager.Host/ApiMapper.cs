@@ -1,7 +1,8 @@
-using HuntForge.Core;
-using HuntForge.Models;
+using MhModManager.Core;
+using MhModManager.Core.Equipment;
+using MhModManager.Models;
 
-namespace HuntForge.Host;
+namespace MhModManager.Host;
 
 internal static class ApiMapper
 {
@@ -81,6 +82,8 @@ internal static class ApiMapper
     private static ModDto MapMod(ModService service, GameProfile game, ModRecord mod, IReadOnlyList<ModGroup> groups)
     {
         var preview = service.PreviewPath(game, mod);
+        var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
+        var equipment = EquipmentResolver.Resolve(game.Id, mod.Files, Directory.Exists(filesDir) ? filesDir : null);
         return new ModDto
         {
             Id = mod.Id,
@@ -96,7 +99,18 @@ internal static class ApiMapper
             PreviewUrl = string.IsNullOrWhiteSpace(preview) ? "" : $"/api/games/{game.Id}/mods/{mod.Id}/preview?t={mod.InstallTime.ToUnixTimeSeconds()}",
             HomeUrl = mod.HomeUrl,
             InstalledAt = mod.InstallTime == default ? "未知时间" : mod.InstallTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm"),
-            GroupName = groups.FirstOrDefault(group => group.Id == mod.GroupId)?.Name ?? "未分组"
+            GroupName = groups.FirstOrDefault(group => group.Id == mod.GroupId)?.Name ?? "未分组",
+            Equipment = equipment.Select(item => new EquipmentDto
+            {
+                Kind = item.Kind,
+                Id = item.Id,
+                Type = item.Type,
+                Name = item.Name,
+                IsPfb = item.IsPfb,
+                IsPak = item.IsPak,
+                FileCount = item.FileCount,
+                Display = item.Display
+            }).ToList()
         };
     }
 }
@@ -167,4 +181,17 @@ internal sealed class ModDto
     public string HomeUrl { get; set; } = "";
     public string InstalledAt { get; set; } = "";
     public string GroupName { get; set; } = "";
+    public List<EquipmentDto> Equipment { get; set; } = [];
+}
+
+internal sealed class EquipmentDto
+{
+    public string Kind { get; set; } = "";
+    public int Id { get; set; }
+    public string Type { get; set; } = "";
+    public string Name { get; set; } = "";
+    public bool IsPfb { get; set; }
+    public bool IsPak { get; set; }
+    public int FileCount { get; set; }
+    public string Display { get; set; } = "";
 }

@@ -1,9 +1,9 @@
-using HuntForge.Core;
-using HuntForge.Models;
+using MhModManager.Core;
+using MhModManager.Models;
 using System.IO.Compression;
 using Xunit;
 
-namespace HuntForge.Tests;
+namespace MhModManager.Tests;
 
 public sealed class ModLayoutParserTests : IDisposable
 {
@@ -263,14 +263,15 @@ public sealed class ModLayoutParserTests : IDisposable
         var gameRoot = CreateRoot("nativePC");
         var relative = "nativePC/test.bin";
         var destination = WriteFile(gameRoot, relative, "original");
+        var source = WriteFile(gameRoot, "mod.bin", "first-mod");
         var backups = new BackupStore(game);
 
-        backups.OnDeploy(gameRoot, relative, destination);
+        backups.OnDeploy(relative, destination, source);
         File.WriteAllText(destination, "first-mod");
-        backups.OnDeploy(gameRoot, relative, destination);
+        backups.OnDeploy(relative, destination, source);
         File.WriteAllText(destination, "second-mod");
         File.Delete(destination);
-        backups.OnRemove(destination, relative, keepBackup: false);
+        backups.OnRemove(destination, relative, keepBackup: false, source);
 
         Assert.Equal("original", File.ReadAllText(destination));
         if (Directory.Exists(AppPaths.GameDir(appId)))
@@ -374,7 +375,7 @@ public sealed class ModLayoutParserTests : IDisposable
 
     private string CreateRoot(params string[] dirs)
     {
-        var root = Path.Combine(Path.GetTempPath(), "huntforge-tests", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "mh-mod-manager-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         _tempRoots.Add(root);
         foreach (var dir in dirs)

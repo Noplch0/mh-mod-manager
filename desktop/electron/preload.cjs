@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
-contextBridge.exposeInMainWorld("huntforge", {
+  contextBridge.exposeInMainWorld("mhModManager", {
   apiBase: () => ipcRenderer.invoke("api-base"),
   pickMods: () => ipcRenderer.invoke("pick-mods"),
   pickUpdate: () => ipcRenderer.invoke("pick-update"),

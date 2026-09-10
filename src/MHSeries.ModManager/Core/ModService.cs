@@ -1,7 +1,8 @@
 using System.Diagnostics;
-using HuntForge.Models;
+using MhModManager.Core.Equipment;
+using MhModManager.Models;
 
-namespace HuntForge.Core;
+namespace MhModManager.Core;
 
 public sealed class ModService
 {
@@ -500,6 +501,34 @@ public sealed class ModService
         ModRepository.Save(game, mod);
     }
 
+    public void ChangeEquipment(GameProfile game, ModRecord mod, string kindName, int fromId, int toId, bool isPfb, bool withTex)
+    {
+        if (mod.Enabled)
+        {
+            throw new InvalidOperationException("请先禁用 MOD 再修改对应装备");
+        }
+
+        if (!Enum.TryParse<EquipKind>(kindName, true, out var kind) || !Enum.IsDefined(typeof(EquipKind), kind))
+        {
+            throw new InvalidOperationException("无法识别装备类型");
+        }
+
+        var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
+        var changed = EquipmentRemapper.Apply(game.Id, filesDir, mod.Files, kind, fromId, toId, isPfb, withTex);
+        if (changed <= 0)
+        {
+            if (fromId == toId)
+            {
+                return;
+            }
+
+            throw new InvalidOperationException("没有可修改的装备文件");
+        }
+
+        ModRepository.RefreshFiles(game, mod);
+        ModRepository.Save(game, mod);
+    }
+
     public void DeleteGroup(GameProfile game, ModGroup group)
     {
         if (group.IsDefault)
@@ -732,6 +761,12 @@ public sealed class ModService
     private void Deploy(GameProfile game, string gamePath, ModRecord mod, bool enable, BackupStore backups)
     {
         var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
+        if (!enable)
+        {
+            Undeploy(game, gamePath, mod, filesDir, backups);
+            return;
+        }
+
         foreach (var relative in mod.Files)
         {
             var destRelative = mod.DeployPath(relative);
@@ -742,19 +777,6 @@ public sealed class ModService
             }
 
             var dest = Path.Combine(gamePath, destRelative.Replace('/', Path.DirectorySeparatorChar));
-            if (!enable)
-            {
-                if (File.Exists(dest))
-                {
-                    File.Delete(dest);
-                }
-
-                var hasOtherOwner = GetMods(game).Any(other => other != mod && other.Enabled &&
-                    other.Files.Any(file => string.Equals(other.DeployPath(file), destRelative, StringComparison.OrdinalIgnoreCase)));
-                backups.OnRemove(dest, destRelative, hasOtherOwner);
-                continue;
-            }
-
             var source = Path.Combine(filesDir, relative.Replace('/', Path.DirectorySeparatorChar));
             var filesRoot = Path.GetFullPath(filesDir)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -766,14 +788,68 @@ public sealed class ModService
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            if (enable && destRelative.EndsWith(".pak", StringComparison.OrdinalIgnoreCase) &&
-                File.Exists(dest) && !FilesEqual(source, dest))
+            if (destRelative.EndsWith(".pak", StringComparison.OrdinalIgnoreCase) &&
+                File.Exists(dest) && !BackupStore.FilesEqual(source, dest))
             {
                 throw new InvalidOperationException($"检测到 PAK 文件冲突，已阻止覆盖游戏文件: {destRelative}");
             }
 
-            backups.OnDeploy(gamePath, destRelative, dest);
+            backups.OnDeploy(destRelative, dest, source);
             CopyVerified(source, dest);
+        }
+    }
+
+    private void Undeploy(GameProfile game, string gamePath, ModRecord mod, string filesDir, BackupStore backups)
+    {
+        var targets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        void AddTarget(string destRelative, string source)
+        {
+            if (string.IsNullOrWhiteSpace(destRelative))
+            {
+                return;
+            }
+
+            var key = destRelative.Replace('\\', '/');
+            targets.TryAdd(key, source);
+        }
+
+        foreach (var relative in mod.Files)
+        {
+            var source = Path.Combine(filesDir, relative.Replace('/', Path.DirectorySeparatorChar));
+            AddTarget(relative, source);
+            AddTarget(mod.DeployPath(relative), source);
+            if (game.UsesPakPatches && ModLayoutParser.IsPakFile(relative) && File.Exists(source))
+            {
+                foreach (var match in PakAllocator.FindMatchingPatches(game, gamePath, source))
+                {
+                    AddTarget(match, source);
+                }
+            }
+        }
+
+        foreach (var mapping in mod.OverwriteFiles)
+        {
+            var source = Path.Combine(filesDir, mapping.Key.Replace('/', Path.DirectorySeparatorChar));
+            AddTarget(mapping.Value, source);
+        }
+
+        foreach (var (destRelative, source) in targets)
+        {
+            if (!ModLayoutParser.IsSafeDeploymentPath(game, destRelative)
+                && !ModLayoutParser.IsPakFile(destRelative))
+            {
+                continue;
+            }
+
+            var dest = Path.Combine(gamePath, destRelative.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(dest))
+            {
+                File.Delete(dest);
+            }
+
+            var hasOtherOwner = GetMods(game).Any(other => other != mod && other.Enabled &&
+                other.Files.Any(file => string.Equals(other.DeployPath(file), destRelative, StringComparison.OrdinalIgnoreCase)));
+            backups.OnRemove(dest, destRelative, hasOtherOwner, File.Exists(source) ? source : null);
         }
     }
 
@@ -882,32 +958,6 @@ public sealed class ModService
         {
             throw new IOException($"文件复制不完整: {source}");
         }
-    }
-
-    private static bool FilesEqual(string left, string right)
-    {
-        var leftInfo = new FileInfo(left);
-        var rightInfo = new FileInfo(right);
-        if (leftInfo.Length != rightInfo.Length)
-        {
-            return false;
-        }
-
-        using var leftStream = File.OpenRead(left);
-        using var rightStream = File.OpenRead(right);
-        var leftBuffer = new byte[1024 * 1024];
-        var rightBuffer = new byte[1024 * 1024];
-        int leftRead;
-        while ((leftRead = leftStream.Read(leftBuffer, 0, leftBuffer.Length)) > 0)
-        {
-            var rightRead = rightStream.Read(rightBuffer, 0, rightBuffer.Length);
-            if (leftRead != rightRead || !leftBuffer.AsSpan(0, leftRead).SequenceEqual(rightBuffer.AsSpan(0, rightRead)))
-            {
-                return false;
-            }
-        }
-
-        return rightStream.ReadByte() == -1;
     }
 
     private string RequireGamePath(GameProfile game)

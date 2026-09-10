@@ -2,7 +2,7 @@ using SharpCompress.Archives;
 using SharpCompress.Common;
 using SharpCompress.Readers;
 
-namespace HuntForge.Core;
+namespace MhModManager.Core;
 
 public static class ArchiveExtractor
 {

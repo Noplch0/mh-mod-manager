@@ -1,6 +1,6 @@
 **/bin/
 **/obj/
-**/data/
+/data/
 dist/
 .vs/
 *.user
@@ -9,3 +9,6 @@ node_modules/
 desktop/dist/
 desktop/release/
 狩技MOD盒子.exe
+_extract/
+src/MHSeries.ModManager/Data/Equipment/*.list.txt
+sample.exe

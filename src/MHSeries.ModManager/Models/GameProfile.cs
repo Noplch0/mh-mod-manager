@@ -1,4 +1,4 @@
-namespace HuntForge.Models;
+namespace MhModManager.Models;
 
 public sealed record GameProfile(
     GameId Id,

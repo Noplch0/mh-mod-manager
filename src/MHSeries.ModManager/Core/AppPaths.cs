@@ -1,4 +1,4 @@
-namespace HuntForge.Core;
+namespace MhModManager.Core;
 
 public static class AppPaths
 {

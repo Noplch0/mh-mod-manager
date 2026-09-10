@@ -13,7 +13,9 @@ const state = {
   pane: "info",
   moveTarget: 0,
   renameDrafts: {},
-  modRenameDrafts: {}
+  modRenameDrafts: {},
+  equipPicker: null,
+  equipCatalog: { kind: "", items: [], loading: false }
 };
 
 const app = document.querySelector("#app");
@@ -73,8 +75,8 @@ function applyWorkspace(data, status) {
 }
 
 async function loadBootstrap() {
-  if (window.huntforge?.apiBase) {
-    state.api = await window.huntforge.apiBase();
+  if (window.mhModManager?.apiBase) {
+    state.api = await window.mhModManager.apiBase();
   }
   const data = await request("/api/bootstrap");
   state.games = data.games;
@@ -106,7 +108,8 @@ function filteredMods(groupId) {
   return state.mods.filter(mod => {
     if (mod.groupId !== groupId) return false;
     if (!query) return true;
-    return [mod.name, mod.category, mod.author].some(value => value.toLowerCase().includes(query));
+    const equipment = (mod.equipment ?? []).flatMap(item => [item.name, item.type, item.display]);
+    return [mod.name, mod.category, mod.author, ...equipment].some(value => String(value ?? "").toLowerCase().includes(query));
   });
 }
 
@@ -121,6 +124,68 @@ function activeMod() {
 
 function previewSrc(mod) {
   return mod?.hasPreview ? apiUrl(mod.previewUrl) : "";
+}
+
+function renderEquipment(mod) {
+  const items = mod?.equipment ?? [];
+  if (items.length === 0) {
+    return '<div class="muted">未能从文件识别对应装备</div>';
+  }
+
+  const canEdit = !mod.enabled;
+  return `<div class="equip-list">${items.map(item => `
+    <div class="equip">
+      <div>
+        <div class="muted">${esc(item.type)}${item.isPfb ? " [pfb]" : ""}${item.isPak ? " [pak]" : ""}</div>
+        <div>${esc(item.name)}</div>
+      </div>
+      <button class="btn" data-action="change-equip" data-kind="${esc(item.kind)}" data-id="${item.id}" data-pfb="${item.isPfb ? "true" : "false"}" ${!canEdit || state.busy ? "disabled" : ""} title="${canEdit ? "修改对应套装" : "请先禁用 MOD"}">修改</button>
+    </div>`).join("")}</div>`;
+}
+
+function filteredEquipOptions() {
+  const picker = state.equipPicker;
+  if (!picker) return [];
+  const query = picker.query.trim().toLowerCase();
+  return (state.equipCatalog.items ?? []).filter(item => {
+    if (picker.filterUsed && item.used && item.id !== picker.fromId) return false;
+    if (!query) return true;
+    return [item.name, item.type, String(item.id)].some(value => String(value ?? "").toLowerCase().includes(query));
+  });
+}
+
+function renderEquipPicker() {
+  const picker = state.equipPicker;
+  if (!picker) return "";
+  const options = filteredEquipOptions();
+  const current = state.equipCatalog.items.find(item => item.id === picker.fromId);
+  const catalogReady = state.equipCatalog.kind === picker.kind && !state.equipCatalog.loading;
+  return `
+    <div class="modal-mask" data-action="close-equip-picker">
+      <div class="modal" data-stop="true">
+        <div class="eyebrow">CHANGE EQUIPMENT</div>
+        <h2 class="h1" style="font-size:18px;margin:8px 0 12px">修改对应套装</h2>
+        <div class="muted" style="margin-bottom:10px">当前：${esc(current?.type ?? picker.kind)} · ${esc(current?.name ?? String(picker.fromId))}${picker.isPfb ? " [pfb]" : ""}</div>
+        <label class="search">
+          <span class="muted">⌕</span>
+          <input id="equip-search" placeholder="搜索装备名称" value="${esc(picker.query)}" />
+        </label>
+         <div class="equip-count muted">${state.equipCatalog.loading ? "正在加载装备列表..." : `${options.length} 项匹配装备`}</div>
+         <div class="equip-options">
+           ${!catalogReady ? '<div class="empty">正在加载装备列表...</div>' : options.map(item => `
+            <button class="equip-option${item.id === picker.toId ? " active" : ""}" data-action="pick-equip" data-id="${item.id}">
+              <span>${esc(item.name)}</span>
+              <span class="muted">${item.id}${item.used ? " · 已占用" : ""}</span>
+             </button>`).join("") || '<div class="empty">没有匹配的装备</div>'}
+        </div>
+        <label class="check"><input type="checkbox" data-role="equip-with-tex" ${picker.withTex ? "checked" : ""} /> 同时修改贴图（可能影响外观）</label>
+        <label class="check"><input type="checkbox" data-role="equip-filter-used" ${picker.filterUsed ? "checked" : ""} /> 过滤已被其他 MOD 占用的装备</label>
+        <div class="actions" style="margin-top:12px">
+          <button class="btn" data-action="close-equip-picker">取消</button>
+           <button class="primary" data-action="apply-equip" ${state.busy || !catalogReady || picker.toId === picker.fromId ? "disabled" : ""}>确认修改</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 function switchClass(on) {
@@ -145,10 +210,12 @@ function render() {
   const listScrollLeft = list?.scrollLeft ?? 0;
   const searchFocus = document.activeElement?.id === "search";
   const searchPos = searchFocus ? document.activeElement.selectionStart : null;
+  const equipSearchFocus = document.activeElement?.id === "equip-search";
+  const equipSearchPos = equipSearchFocus ? document.activeElement.selectionStart : null;
   app.innerHTML = `
     <div class="app">
       <header class="titlebar">
-        <div class="brand"><span class="mark">H</span>HUNTFORGE</div>
+        <div class="brand"><span class="mark">M</span>MH-MOD-MANAGER</div>
         <div class="muted">MOD WORKBENCH / MONSTER HUNTER</div>
       </header>
       <div class="shell">
@@ -180,7 +247,7 @@ function render() {
         <main class="workspace">
           <div class="toolbar">
             <div>
-              <h1 class="h1">${esc(game?.displayName ?? "HuntForge")}</h1>
+              <h1 class="h1">${esc(game?.displayName ?? "mh-mod-manager")}</h1>
               <div class="muted" style="margin-top:7px">${esc(game?.pakState ?? "")} · ${esc(game?.path || "未设置游戏目录")}</div>
             </div>
             <div class="actions">
@@ -195,7 +262,7 @@ function render() {
           <div class="searchrow">
             <label class="search">
               <span class="muted">⌕</span>
-              <input id="search" placeholder="搜索 MOD 名称、类型或作者" value="${esc(state.search)}" />
+              <input id="search" placeholder="搜索 MOD 名称、类型、作者或装备" value="${esc(state.search)}" />
             </label>
             <div class="stats">
               <div class="stat"><b>${state.mods.length}</b><span class="muted">全部</span></div>
@@ -294,6 +361,11 @@ function render() {
               <div class="kv"><span class="muted">分组</span><span>${esc(active.groupName)}</span></div>
                <div class="kv"><span class="muted">导入时间</span><span>${esc(active.installedAt)}</span></div>
              </div>
+             <div class="field">
+               <span>游戏内装备</span>
+               ${renderEquipment(active)}
+                ${active.enabled ? '<div class="muted">禁用 MOD 后可修改对应套装</div>' : '<div class="muted">将文件重定向到另一套游戏内装备，与原版盒子一致</div>'}
+             </div>
              <div class="actions mod-tools">
                <button class="primary" data-action="update-mod" data-id="${active.id}" ${state.busy ? "disabled" : ""}>↻ 更新 MOD</button>
                <button class="btn" data-action="open-mod-folder" data-id="${active.id}" ${state.busy ? "disabled" : ""}>▣ 查看文件</button>
@@ -312,11 +384,12 @@ function render() {
         </aside>
       </div>
       <footer class="footer">
-        <span class="muted">HuntForge / Electron workspace</span>
+        <span class="muted">mh-mod-manager / Electron workspace</span>
         <span class="muted">${state.busy ? "处理中..." : esc(state.status)}</span>
         <button class="btn" data-action="clean" ${state.busy || !game?.installed ? "disabled" : ""}>清理部署文件</button>
       </footer>
       <div class="dropmask" id="dropmask"><div class="dropcard">松开以批量导入 MOD</div></div>
+      ${renderEquipPicker()}
     </div>
   `;
   const nextList = app.querySelector(".list");
@@ -329,12 +402,18 @@ function render() {
     input?.focus();
     if (searchPos != null) input.setSelectionRange(searchPos, searchPos);
   }
+  if (equipSearchFocus) {
+    const input = app.querySelector("#equip-search");
+    input?.focus();
+    if (equipSearchPos != null) input.setSelectionRange(equipSearchPos, equipSearchPos);
+  }
 }
 
 function onClick(event) {
   if (event.target.closest("select, option, input, textarea, label")) return;
   const target = event.target.closest("[data-action]");
   if (!target || !state.game) return;
+  if (target.closest("[data-stop]") && !event.target.closest("[data-action]")) return;
   event.stopPropagation();
   const id = Number(target.dataset.id);
   const action = target.dataset.action;
@@ -458,6 +537,27 @@ function onClick(event) {
       method: "POST",
       body: JSON.stringify({ enabled: target.dataset.on !== "true" })
     }));
+    return;
+  }
+  if (action === "change-equip") {
+    openEquipPicker(target.dataset.kind, Number(target.dataset.id), target.dataset.pfb === "true");
+    return;
+  }
+  if (action === "close-equip-picker") {
+    if (target.classList.contains("modal-mask") && event.target.closest("[data-stop]")) return;
+    state.equipPicker = null;
+    render();
+    return;
+  }
+  if (action === "pick-equip") {
+    if (state.equipPicker) {
+      state.equipPicker.toId = Number(target.dataset.id);
+      render();
+    }
+    return;
+  }
+  if (action === "apply-equip") {
+    applyEquipChange();
   }
 }
 
@@ -473,6 +573,11 @@ function onInput(event) {
   }
   if (event.target.dataset.role === "mod-name") {
     state.modRenameDrafts[Number(event.target.dataset.id)] = event.target.value;
+    return;
+  }
+  if (event.target.id === "equip-search" && state.equipPicker) {
+    state.equipPicker.query = event.target.value;
+    render();
   }
 }
 
@@ -513,6 +618,15 @@ function onChange(event) {
   }
   if (target.dataset.role === "setting" || target.dataset.role === "install-option") {
     saveSettings();
+    return;
+  }
+  if (target.dataset.role === "equip-with-tex" && state.equipPicker) {
+    state.equipPicker.withTex = target.checked;
+    return;
+  }
+  if (target.dataset.role === "equip-filter-used" && state.equipPicker) {
+    state.equipPicker.filterUsed = target.checked;
+    render();
   }
 }
 
@@ -530,8 +644,42 @@ async function saveSettings() {
   });
 }
 
+async function openEquipPicker(kind, id, isPfb) {
+  state.equipPicker = { kind, fromId: id, toId: id, isPfb, query: "", withTex: false, filterUsed: true };
+  state.equipCatalog = { kind, items: [], loading: true };
+  render();
+  try {
+    const data = await request(`/api/games/${state.game.id}/equipment?kind=${encodeURIComponent(kind)}`);
+    if (!state.equipPicker || state.equipPicker.kind !== kind) return;
+    state.equipCatalog = { kind, items: data.items ?? [] };
+  } catch (error) {
+    state.status = error.message || "无法加载装备列表";
+    state.equipPicker = null;
+  }
+  render();
+}
+
+async function applyEquipChange() {
+  const picker = state.equipPicker;
+  if (!picker || !state.game || !state.activeId) return;
+  await run(async () => {
+    const data = await request(`/api/games/${state.game.id}/mods/${state.activeId}/equipment`, {
+      method: "POST",
+      body: JSON.stringify({
+        kind: picker.kind,
+        fromId: picker.fromId,
+        toId: picker.toId,
+        isPfb: picker.isPfb,
+        withTex: picker.withTex
+      })
+    });
+    if (!data.error) state.equipPicker = null;
+    return data;
+  }, "修改装备失败");
+}
+
 async function updateMod(id) {
-  const path = window.huntforge?.pickUpdate ? await window.huntforge.pickUpdate() : "";
+  const path = window.mhModManager?.pickUpdate ? await window.mhModManager.pickUpdate() : "";
   if (!path) return;
   state.status = "正在更新 MOD...";
   await run(() => request(`/api/games/${state.game.id}/mods/${id}/update`, {
@@ -541,7 +689,7 @@ async function updateMod(id) {
 }
 
 async function importMods(paths) {
-  const picked = paths ?? (window.huntforge ? await window.huntforge.pickMods() : []);
+  const picked = paths ?? (window.mhModManager ? await window.mhModManager.pickMods() : []);
   if (!picked?.length) return;
   state.status = `正在导入 ${picked.length} 个 MOD...`;
   await run(() => request(`/api/games/${state.game.id}/import`, {
@@ -551,7 +699,7 @@ async function importMods(paths) {
 }
 
 async function pickGame() {
-  const folder = window.huntforge ? await window.huntforge.pickFolder() : "";
+  const folder = window.mhModManager ? await window.mhModManager.pickFolder() : "";
   if (!folder) return;
   await run(() => request(`/api/games/${state.game.id}/path`, {
     method: "PUT",
@@ -566,18 +714,18 @@ async function openGameFolder() {
     render();
     return;
   }
-  if (!window.huntforge?.openPath) {
+  if (!window.mhModManager?.openPath) {
     state.status = "当前环境无法打开文件夹";
     render();
     return;
   }
-  const error = await window.huntforge.openPath(folder);
+  const error = await window.mhModManager.openPath(folder);
   state.status = error ? `无法打开目录: ${error}` : "已打开游戏目录";
   render();
 }
 
 async function openModFolder(id) {
-  if (!window.huntforge?.openPath || !state.game) {
+  if (!window.mhModManager?.openPath || !state.game) {
     state.status = "当前环境无法打开文件夹";
     render();
     return;
@@ -585,7 +733,7 @@ async function openModFolder(id) {
 
   try {
     const result = await request(`/api/games/${state.game.id}/mods/${id}/folder`);
-    const error = await window.huntforge.openPath(result.path);
+    const error = await window.mhModManager.openPath(result.path);
     state.status = error ? `无法打开 MOD 文件夹: ${error}` : "已打开 MOD 文件夹";
   } catch (error) {
     state.status = error.message || "无法打开 MOD 文件夹";
@@ -606,7 +754,7 @@ function setupDrop() {
     event.preventDefault();
     mask()?.classList.remove("show");
     const paths = [...(event.dataTransfer?.files ?? [])]
-      .map(file => window.huntforge?.filePath?.(file) || file.path)
+      .map(file => window.mhModManager?.filePath?.(file) || file.path)
       .filter(Boolean);
     if (paths.length) importMods(paths);
   });
@@ -616,6 +764,12 @@ async function start() {
   app.addEventListener("click", onClick);
   app.addEventListener("input", onInput);
   app.addEventListener("change", onChange);
+  window.addEventListener("keydown", event => {
+    if (event.key === "Escape" && state.equipPicker && !state.busy) {
+      state.equipPicker = null;
+      render();
+    }
+  });
   render();
   setupDrop();
   try {

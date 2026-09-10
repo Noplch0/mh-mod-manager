@@ -1,6 +1,6 @@
-using HuntForge.Models;
+using MhModManager.Models;
 
-namespace HuntForge.Core;
+namespace MhModManager.Core;
 
 public static class PakAllocator
 {
@@ -124,6 +124,29 @@ public static class PakAllocator
     }
 
     public static void Clear(ModRecord mod) => mod.OverwriteFiles.Clear();
+
+    public static IEnumerable<string> FindMatchingPatches(GameProfile game, string gamePath, string sourcePak)
+    {
+        if (!game.UsesPakPatches || !Directory.Exists(gamePath) || !File.Exists(sourcePak))
+        {
+            yield break;
+        }
+
+        var hash = Md5Prefix(sourcePak);
+        foreach (var file in Directory.GetFiles(gamePath, "*.pak"))
+        {
+            var name = Path.GetFileName(file);
+            if (!IsPatchPak(game, name))
+            {
+                continue;
+            }
+
+            if (Md5Prefix(file) == hash)
+            {
+                yield return name;
+            }
+        }
+    }
 
     private static IEnumerable<int> ExistingPatchNumbers(GameProfile game, string gamePath, HashSet<string> ignoreNames)
     {

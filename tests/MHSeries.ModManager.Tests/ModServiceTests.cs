@@ -1,13 +1,13 @@
-using HuntForge.Core;
-using HuntForge.Models;
+using MhModManager.Core;
+using MhModManager.Models;
 using Xunit;
 
-namespace HuntForge.Tests;
+namespace MhModManager.Tests;
 
 public sealed class ModServiceTests : IDisposable
 {
     private readonly int _appId = Random.Shared.Next(9_000_001, 9_900_000);
-    private readonly string _root = Path.Combine(Path.GetTempPath(), "huntforge-service-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "mh-mod-manager-service-tests", Guid.NewGuid().ToString("N"));
     private readonly SettingsStore _settings = new();
     private readonly GameProfile _game;
     private readonly ModService _service;
@@ -187,6 +187,74 @@ public sealed class ModServiceTests : IDisposable
     }
 
     [Fact]
+    public void DisablingDeletesAdditiveFilesEvenIfTheyAlreadyLivedInTheGameDir()
+    {
+        var destination = WriteFile(_root, "nativePC/plugins/extra.dll", "plugin-bytes");
+        var mod = _service.Install(_game, CreateParsed("plugin", "plugin-bytes", "nativePC/plugins/extra.dll"));
+
+        _service.SetEnabled(_game, mod, true);
+        Assert.True(File.Exists(destination));
+        _service.SetEnabled(_game, mod, false);
+
+        Assert.False(File.Exists(destination));
+    }
+
+    [Fact]
+    public void DisablingRestoresReplacedVanillaFiles()
+    {
+        var destination = WriteFile(_root, "nativePC/shared.bin", "original");
+        var mod = _service.Install(_game, CreateParsed("overlay", "modded"));
+
+        _service.SetEnabled(_game, mod, true);
+        Assert.Equal("modded", File.ReadAllText(destination));
+        _service.SetEnabled(_game, mod, false);
+
+        Assert.Equal("original", File.ReadAllText(destination));
+    }
+
+    [Fact]
+    public void DisablingPakModRemovesMappedPatchEvenIfOverwriteIsLost()
+    {
+        var pakAppId = _appId + 17;
+        var wilds = new GameProfile(GameId.Wilds, "wilds", "w", "w", "wilds.exe", pakAppId, "w",
+            "re_chunk_000.pak.sub_000.pak.patch_", 6);
+        _settings.SetGamePath(wilds, _root);
+        File.WriteAllText(Path.Combine(_root, wilds.ExeName), "fake-game");
+        var staging = CreateStaging("pak-mod");
+        var source = WriteFile(staging, "armor.pak", "pak-bytes");
+        var parsed = new ParsedMod
+        {
+            Name = "pak-mod",
+            SourceFile = Path.Combine(staging, "armor.zip"),
+            StagingDir = staging,
+            Files = [new ParsedFile { SourcePath = source, RelativeDest = "armor.pak" }]
+        };
+
+        try
+        {
+            var service = new ModService(_settings);
+            var mod = service.Install(wilds, parsed);
+            service.SetEnabled(wilds, mod, true);
+            var mapped = Assert.Single(mod.OverwriteFiles).Value;
+            var deployed = Path.Combine(_root, mapped);
+            Assert.True(File.Exists(deployed));
+
+            mod.OverwriteFiles.Clear();
+            service.SetEnabled(wilds, mod, false);
+
+            Assert.False(File.Exists(deployed));
+        }
+        finally
+        {
+            _settings.Current.GamePaths.Remove(pakAppId);
+            if (Directory.Exists(AppPaths.GameDir(pakAppId)))
+            {
+                Directory.Delete(AppPaths.GameDir(pakAppId), true);
+            }
+        }
+    }
+
+    [Fact]
     public void RenameModUpdatesDisplayName()
     {
         var mod = _service.Install(_game, CreateParsed("old-name", "data"));
@@ -285,16 +353,16 @@ public sealed class ModServiceTests : IDisposable
         Assert.DoesNotContain(_service.GetGroups(_game), item => item.Id == group.Id);
     }
 
-    private ParsedMod CreateParsed(string name, string content)
+    private ParsedMod CreateParsed(string name, string content, string relativeDest = "nativePC/shared.bin")
     {
         var staging = CreateStaging(name);
-        var source = WriteFile(staging, "shared.bin", content);
+        var source = WriteFile(staging, Path.GetFileName(relativeDest), content);
         return new ParsedMod
         {
             Name = name,
             SourceFile = Path.Combine(staging, name + ".zip"),
             StagingDir = staging,
-            Files = [new ParsedFile { SourcePath = source, RelativeDest = "nativePC/shared.bin" }]
+            Files = [new ParsedFile { SourcePath = source, RelativeDest = relativeDest }]
         };
     }
 

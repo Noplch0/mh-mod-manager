@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
-using HuntForge.Models;
+using MhModManager.Models;
 using Microsoft.Win32;
 
-namespace HuntForge.Core;
+namespace MhModManager.Core;
 
 public static class SteamLocator
 {

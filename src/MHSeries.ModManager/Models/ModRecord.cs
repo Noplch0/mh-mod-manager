@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace HuntForge.Models;
+namespace MhModManager.Models;
 
 public sealed class ModRecord
 {

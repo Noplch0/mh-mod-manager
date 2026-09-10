@@ -1,6 +1,6 @@
-using HuntForge.Models;
+using MhModManager.Models;
 
-namespace HuntForge.Core;
+namespace MhModManager.Core;
 
 public static class ModLayoutParser
 {

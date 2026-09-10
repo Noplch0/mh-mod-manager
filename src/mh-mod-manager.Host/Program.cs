@@ -1,12 +1,13 @@
 using System.Text.Json.Serialization;
-using HuntForge.Core;
-using HuntForge.Host;
-using HuntForge.Models;
+using MhModManager.Core;
+using MhModManager.Core.Equipment;
+using MhModManager.Host;
+using MhModManager.Models;
 
 var dataRoot = ResolveDataRoot(args);
 AppPaths.Configure(dataRoot);
 AppPaths.EnsureCreated();
-Console.WriteLine($"HuntForge data: {AppPaths.Root}");
+Console.WriteLine($"mh-mod-manager data: {AppPaths.Root}");
 
 var settings = new SettingsStore();
 settings.Load();
@@ -272,6 +273,44 @@ app.MapGet("/api/games/{gameId}/mods/{modId}/preview", (GameId gameId, int modId
     }
 });
 
+app.MapGet("/api/games/{gameId}/equipment", (GameId gameId, string? kind) =>
+{
+    lock (gate)
+    {
+        var game = GameProfile.Get(gameId);
+        var items = EquipmentLookup.List(gameId, kind ?? "");
+        var used = new HashSet<(string Kind, int Id)>();
+        foreach (var mod in service.GetMods(game))
+        {
+            var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
+            foreach (var item in EquipmentResolver.Resolve(game.Id, mod.Files, Directory.Exists(filesDir) ? filesDir : null))
+            {
+                used.Add((item.Kind, item.Id));
+            }
+        }
+
+        return Results.Json(new
+        {
+            items = items.Select(item => new
+            {
+                item.Kind,
+                item.Id,
+                item.Type,
+                item.Name,
+                used = used.Contains((item.Kind, item.Id))
+            })
+        });
+    }
+});
+
+app.MapPost("/api/games/{gameId}/mods/{modId}/equipment", (GameId gameId, int modId, ChangeEquipmentRequest body) =>
+    Mutate(gameId, service, settings, gate, game =>
+    {
+        service.ChangeEquipment(game, RequireMod(service, game, modId), body.Kind ?? "", body.FromId, body.ToId, body.IsPfb, body.WithTex);
+        var name = EquipmentLookup.DisplayName(body.Kind ?? "", body.ToId, gameId);
+        return string.IsNullOrWhiteSpace(name) ? "已修改对应装备" : $"已将对应装备改为 {name}";
+    }));
+
 app.MapGet("/api/games/{gameId}/mods/{modId}/folder", (GameId gameId, int modId) =>
 {
     lock (gate)
@@ -347,7 +386,7 @@ static string ResolveDataRoot(string[] args)
         }
     }
 
-    var env = Environment.GetEnvironmentVariable("HUNTFORGE_DATA");
+    var env = Environment.GetEnvironmentVariable("MH_MOD_MANAGER_DATA");
     if (!string.IsNullOrWhiteSpace(env))
     {
         return Path.GetFullPath(env);
@@ -379,3 +418,4 @@ internal sealed record GroupIdRequest(int GroupId);
 internal sealed record NameRequest(string? Name);
 internal sealed record GroupPatch(string? Name, bool? Collapsed);
 internal sealed record ModIdsRequest(List<int>? ModIds);
+internal sealed record ChangeEquipmentRequest(string? Kind, int FromId, int ToId, bool IsPfb, bool WithTex);

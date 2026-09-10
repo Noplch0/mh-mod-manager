@@ -15,13 +15,13 @@ let win;
 
 function startHost() {
   if (isDev) {
-    const project = path.resolve(__dirname, "../../src/HuntForge.Host/HuntForge.Host.csproj");
+    const project = path.resolve(__dirname, "../../src/mh-mod-manager.Host/mh-mod-manager.Host.csproj");
     host = spawn("dotnet", ["run", "--project", project, "--", "--data", dataDir], {
       windowsHide: true,
       stdio: "pipe"
     });
   } else {
-    const exe = path.join(process.resourcesPath, "host", "HuntForge.Host.exe");
+    const exe = path.join(process.resourcesPath, "host", "mh-mod-manager.Host.exe");
     host = spawn(exe, ["--data", dataDir], {
       windowsHide: true,
       stdio: "pipe"
@@ -50,7 +50,7 @@ async function waitForHost() {
     }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  throw new Error("HuntForge 后端未能启动");
+  throw new Error("mh-mod-manager 后端未能启动");
 }
 
 function createWindow() {

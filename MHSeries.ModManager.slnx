@@ -1,7 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/MHSeries.ModManager/MHSeries.ModManager.csproj" />
-    <Project Path="src/HuntForge.Host/HuntForge.Host.csproj" />
+    <Project Path="src/mh-mod-manager.Host/mh-mod-manager.Host.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MHSeries.ModManager.Tests/MHSeries.ModManager.Tests.csproj" />
