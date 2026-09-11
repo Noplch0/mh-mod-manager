@@ -40,3 +40,21 @@ npm start
 ```powershell
 git tag v1.0.0
 ```
+
+## 自动发布
+
+`.github/workflows/release.yml` 会在推送 `v*` 标签时自动构建并发布到 GitHub Release：
+
+1. 检出代码（`fetch-depth: 0`，供 `publish.ps1` 读取 tag 版本号）
+2. 安装 .NET 9 与 Node.js 22，执行 `npm ci`
+3. 运行 `publish.ps1`：自包含 .NET 后端（非单文件）+ Electron 界面，组装成目录版并压缩
+4. 上传 `mh-mod-manager-<version>.zip` 与同名 `.sha256` 校验文件
+
+发布说明优先读取 `docs/release-notes/<tag>.md`，没有该文件时回退到 GitHub 自动生成的说明。
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+也可以在 Actions 页面用 `workflow_dispatch` 手动指定已存在的标签重新发布。

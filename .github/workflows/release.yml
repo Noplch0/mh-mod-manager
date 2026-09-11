@@ -1,0 +1,138 @@
+name: Release
+
+# 推送 v* 标签时自动打包并发布到 GitHub Release。
+# 发布物是「目录版压缩包」（自包含 .NET 后端 + Electron，非单文件 exe）。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的标签，例如 v1.0.0（需已存在）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build folder package and publish release
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 需要完整 tag 历史，publish.ps1 用 git describe 取版本号
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve version
+        id: version
+        run: |
+          $raw = "${{ inputs.tag }}"
+          if ([string]::IsNullOrWhiteSpace($raw)) { $raw = "${{ github.ref_name }}" }
+          $raw = $raw.Trim()
+          if ($raw -notmatch '^v') { $raw = "v$raw" }
+          $version = $raw -replace '^v', ''
+          if ([string]::IsNullOrWhiteSpace($version)) { throw "Cannot resolve version from ref '$raw'" }
+          "tag=$raw" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "tag=$raw version=$version"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      # publish.ps1 负责: dotnet publish (自包含非单文件) + vite build + 组装 + 压缩
+      - name: Build package
+        run: .\publish.ps1
+
+      - name: Normalize package and compute checksum
+        id: package
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $dist = (Resolve-Path dist).Path
+          $target = Join-Path $dist "mh-mod-manager-$version.zip"
+          $zip = Get-ChildItem -Path $dist -Filter "mh-mod-manager-*.zip" |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $zip) { throw "No package produced in dist/" }
+          if ($zip.FullName -ne $target) {
+            Write-Host "Renaming $($zip.Name) -> mh-mod-manager-$version.zip"
+            Move-Item -LiteralPath $zip.FullName -Destination $target -Force
+          }
+          if (-not (Test-Path -LiteralPath $target)) { throw "Package missing: $target" }
+
+          $hash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+          $shaPath = "$target.sha256"
+          "$hash  mh-mod-manager-$version.zip" | Set-Content -LiteralPath $shaPath -Encoding ascii
+          Write-Host "Package: $target"
+          Write-Host "SHA256 : $hash"
+          "zip=$target" >> $env:GITHUB_OUTPUT
+          "sha=$shaPath" >> $env:GITHUB_OUTPUT
+
+      - name: Upload workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mh-mod-manager-${{ steps.version.outputs.version }}
+          path: |
+            dist/mh-mod-manager-*.zip
+            dist/mh-mod-manager-*.zip.sha256
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $repo = "${{ github.repository }}"
+          $zip = "${{ steps.package.outputs.zip }}"
+          $sha = "${{ steps.package.outputs.sha }}"
+          $notesFile = "docs/release-notes/$tag.md"
+
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists, uploading assets with --clobber"
+            gh release upload $tag $zip $sha --repo $repo --clobber
+            if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
+          } else {
+            $ghArgs = @(
+              "release", "create", $tag, $zip, $sha,
+              "--repo", $repo,
+              "--title", "mh-mod-manager $version"
+            )
+            if (Test-Path -LiteralPath $notesFile) {
+              Write-Host "Using release notes: $notesFile"
+              $ghArgs += @("--notes-file", $notesFile)
+            } else {
+              Write-Host "No notes file for $tag, generating notes from commit history"
+              $ghArgs += "--generate-notes"
+            }
+            gh @ghArgs
+            if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+          }
+          Write-Host "Release ready: https://github.com/$repo/releases/tag/$tag"
