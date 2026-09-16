@@ -355,9 +355,16 @@ public sealed class ModService
         try
         {
             mod.Enabled = enable;
-            if (enable && game.UsesPakPatches && _settings.Current.FixPakNumber)
+            if (enable && game.UsesPakPatches)
             {
-                PakAllocator.Assign(game, gamePath, mods, mod, enable);
+                if (PakModsManager.IsEnabled(_settings))
+                {
+                    PakModsManager.AssignForEnable(game, _settings, gamePath, mods, GetGroups(game));
+                }
+                else if (_settings.Current.FixPakNumber)
+                {
+                    PakAllocator.Assign(game, gamePath, mods, mod, enable);
+                }
             }
 
             ValidateEnabledMods(game, mods, mod, enable);
@@ -366,7 +373,15 @@ public sealed class ModService
                 Deploy(game, gamePath, mod, enable: false, backups);
                 if (game.UsesPakPatches)
                 {
-                    PakAllocator.Clear(mod);
+                    if (PakModsManager.IsEnabled(_settings))
+                    {
+                        // 重新排布其余启用 MOD 的 X 编号。
+                        PakModsManager.AssignForEnable(game, _settings, gamePath, mods, GetGroups(game));
+                    }
+                    else
+                    {
+                        PakAllocator.Clear(mod);
+                    }
                 }
             }
 
@@ -427,6 +442,37 @@ public sealed class ModService
 
             throw;
         }
+    }
+
+    public void SetPakModsMode(bool enabled)
+    {
+        foreach (var game in GameProfile.All.Where(game => game.UsesPakPatches))
+        {
+            SetPakModsMode(game, enabled);
+        }
+    }
+
+    public void SetPakModsMode(GameProfile game, bool enabled)
+    {
+        if (!game.UsesPakPatches)
+        {
+            return;
+        }
+
+        var gamePath = ResolveGamePath(game);
+        if (string.IsNullOrWhiteSpace(gamePath) || !Directory.Exists(gamePath))
+        {
+            return;
+        }
+
+        if (_settings.Current.CheckGameRunning && IsGameRunning(game, gamePath))
+        {
+            throw new InvalidOperationException($"游戏正在运行，请先关闭游戏：{game.DisplayName}");
+        }
+
+        var mods = GetMods(game);
+        PakModsManager.SetPakModsMode(game, _settings, gamePath, enabled, mods, GetGroups(game), () =>
+            RedeployEnabled(game, gamePath, mods, new BackupStore(game)));
     }
 
     public void Uninstall(GameProfile game, ModRecord mod)
@@ -499,6 +545,12 @@ public sealed class ModService
 
         mod.DisplayName = name.Trim();
         ModRepository.Save(game, mod);
+        if (mod.Enabled && game.UsesPakPatches && PakModsManager.IsEnabled(_settings))
+        {
+            var gamePath = RequireGamePath(game);
+            PakModsManager.Sync(game, _settings, gamePath, GetMods(game), GetGroups(game));
+            Deploy(game, gamePath, mod, enable: true, new BackupStore(game));
+        }
     }
 
     public void ChangeEquipment(GameProfile game, ModRecord mod, string kindName, int fromId, int toId, bool isPfb, bool withTex)
@@ -640,14 +692,28 @@ public sealed class ModService
                 Deploy(game, gamePath, mod, enable: false, backups);
                 if (game.UsesPakPatches)
                 {
-                    PakAllocator.Clear(mod);
+                    if (PakModsManager.IsEnabled(_settings))
+                    {
+                        PakModsManager.AssignForEnable(game, _settings, gamePath, mods, GetGroups(game));
+                    }
+                    else
+                    {
+                        PakAllocator.Clear(mod);
+                    }
                 }
             }
 
             mod.Enabled = enable;
-            if (enable && game.UsesPakPatches && _settings.Current.FixPakNumber)
+            if (enable && game.UsesPakPatches)
             {
-                PakAllocator.Assign(game, gamePath, mods, mod, enable);
+                if (PakModsManager.IsEnabled(_settings))
+                {
+                    PakModsManager.AssignForEnable(game, _settings, gamePath, mods, GetGroups(game));
+                }
+                else if (_settings.Current.FixPakNumber)
+                {
+                    PakAllocator.Assign(game, gamePath, mods, mod, enable);
+                }
             }
 
             ModRepository.Save(game, mod);
@@ -682,7 +748,14 @@ public sealed class ModService
             mod.Enabled = false;
             if (game.UsesPakPatches)
             {
-                PakAllocator.Clear(mod);
+                if (PakModsManager.IsEnabled(_settings))
+                {
+                    PakModsManager.AssignForEnable(game, _settings, gamePath, mods, GetGroups(game));
+                }
+                else
+                {
+                    PakAllocator.Clear(mod);
+                }
             }
             ModRepository.Save(game, mod);
         }
@@ -747,6 +820,10 @@ public sealed class ModService
         }
 
         ValidateEnabledMods(game, mods, mods.First(item => item.Enabled), enable: true);
+        if (game.UsesPakPatches && PakModsManager.IsEnabled(_settings))
+        {
+            PakModsManager.Sync(game, _settings, gamePath, mods, GetGroups(game));
+        }
         RedeployEnabled(game, gamePath, mods, new BackupStore(game));
     }
 
@@ -770,8 +847,9 @@ public sealed class ModService
         foreach (var relative in mod.Files)
         {
             var destRelative = mod.DeployPath(relative);
+            var isPakModsTarget = PakModsManager.IsManagedTarget(destRelative);
             if (!ModLayoutParser.IsSafeStoredPath(relative) ||
-                !ModLayoutParser.IsSafeDeploymentPath(game, destRelative))
+                (!isPakModsTarget && !ModLayoutParser.IsSafeDeploymentPath(game, destRelative)))
             {
                 throw new InvalidOperationException($"已阻止不安全的 MOD 部署路径: {destRelative}");
             }
@@ -788,7 +866,8 @@ public sealed class ModService
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            if (destRelative.EndsWith(".pak", StringComparison.OrdinalIgnoreCase) &&
+            if (!isPakModsTarget &&
+                destRelative.EndsWith(".pak", StringComparison.OrdinalIgnoreCase) &&
                 File.Exists(dest) && !BackupStore.FilesEqual(source, dest))
             {
                 throw new InvalidOperationException($"检测到 PAK 文件冲突，已阻止覆盖游戏文件: {destRelative}");
@@ -824,6 +903,20 @@ public sealed class ModService
                 {
                     AddTarget(match, source);
                 }
+
+                // pak_mods 模式下的历史遗留文件也要能被找到并清理。
+                var dir = PakModsManager.PakModsDir(gamePath);
+                if (Directory.Exists(dir))
+                {
+                    var hash = PakAllocator.PrefixHash(source);
+                    foreach (var file in Directory.GetFiles(dir, "*.pak"))
+                    {
+                        if (PakAllocator.PrefixHash(file) == hash)
+                        {
+                            AddTarget($"{PakModsManager.DirName}/{Path.GetFileName(file)}", source);
+                        }
+                    }
+                }
             }
         }
 
@@ -835,7 +928,8 @@ public sealed class ModService
 
         foreach (var (destRelative, source) in targets)
         {
-            if (!ModLayoutParser.IsSafeDeploymentPath(game, destRelative)
+            if (!PakModsManager.IsManagedTarget(destRelative) &&
+                !ModLayoutParser.IsSafeDeploymentPath(game, destRelative)
                 && !ModLayoutParser.IsPakFile(destRelative))
             {
                 continue;
@@ -848,7 +942,12 @@ public sealed class ModService
             }
 
             var hasOtherOwner = GetMods(game).Any(other => other != mod && other.Enabled &&
-                other.Files.Any(file => string.Equals(other.DeployPath(file), destRelative, StringComparison.OrdinalIgnoreCase)));
+                other.Files.Any(file => string.Equals(other.DeployPath(file), destRelative, StringComparison.OrdinalIgnoreCase)))
+                // pak_mods 里的文件不在别人的 OverwriteFiles 里，但可能是其他 mod 的同名 pak。
+                || (destRelative.StartsWith(PakModsManager.DirName + "/", StringComparison.OrdinalIgnoreCase) &&
+                    GetMods(game).Any(other => other != mod && other.Enabled &&
+                        other.Files.Any(file => ModLayoutParser.IsPakFile(file) &&
+                            string.Equals(Path.GetFileName(other.DeployPath(file)), Path.GetFileName(destRelative), StringComparison.OrdinalIgnoreCase))));
             backups.OnRemove(dest, destRelative, hasOtherOwner, File.Exists(source) ? source : null);
         }
     }
@@ -943,7 +1042,8 @@ public sealed class ModService
                 }
 
                 if (!ModLayoutParser.IsSafeStoredPath(file) ||
-                    !ModLayoutParser.IsSafeDeploymentPath(game, mod.DeployPath(file)))
+                    (!PakModsManager.IsManagedTarget(mod.DeployPath(file)) &&
+                     !ModLayoutParser.IsSafeDeploymentPath(game, mod.DeployPath(file))))
                 {
                     throw new InvalidOperationException($"已阻止不安全的 MOD 部署路径: {mod.DeployPath(file)}");
                 }

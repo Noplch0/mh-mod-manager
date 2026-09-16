@@ -1,7 +1,7 @@
 const state = {
   api: "http://127.0.0.1:17865",
   games: [],
-  settings: { lastGame: "Wilds", checkGameRunning: true, fixPakNumber: true, installOption: 0 },
+  settings: { lastGame: "Wilds", checkGameRunning: true, fixPakNumber: true, usePakModsDir: false, installOption: 0 },
   game: null,
   groups: [],
   mods: [],
@@ -339,6 +339,8 @@ function render() {
               <span>部署行为</span>
               <label class="check"><input type="checkbox" data-role="setting" data-key="checkGameRunning" ${state.settings.checkGameRunning ? "checked" : ""} /> 游戏运行时阻止修改</label>
               <label class="check"><input type="checkbox" data-role="setting" data-key="fixPakNumber" ${state.settings.fixPakNumber ? "checked" : ""} /> 自动修复 PAK 编号</label>
+              <label class="check"><input type="checkbox" data-role="setting" data-key="usePakModsDir" ${state.settings.usePakModsDir ? "checked" : ""} /> 使用 pak_mods 文件夹（崛起/荒野）</label>
+              <div class="muted" style="font-size:12px">开启后 PAK 按列表顺序命名为 X0000-MOD名.pak 部署到游戏根目录 pak_mods；关闭则按原方式重命名后放根目录。</div>
             </div>
             <div class="field">
               <span>安装源文件</span>
@@ -633,11 +635,12 @@ function onChange(event) {
 async function saveSettings() {
   const checkGameRunning = app.querySelector('[data-key="checkGameRunning"]')?.checked ?? state.settings.checkGameRunning;
   const fixPakNumber = app.querySelector('[data-key="fixPakNumber"]')?.checked ?? state.settings.fixPakNumber;
+  const usePakModsDir = app.querySelector('[data-key="usePakModsDir"]')?.checked ?? state.settings.usePakModsDir;
   const installOption = Number(app.querySelector("[data-role='install-option']")?.value ?? state.settings.installOption);
   await run(async () => {
     const data = await request("/api/settings", {
       method: "PUT",
-      body: JSON.stringify({ checkGameRunning, fixPakNumber, installOption })
+      body: JSON.stringify({ checkGameRunning, fixPakNumber, usePakModsDir, installOption })
     });
     applyWorkspace(data.workspace, "设置已保存");
     return data.workspace;

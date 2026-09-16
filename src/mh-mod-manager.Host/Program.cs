@@ -77,9 +77,27 @@ app.MapPut("/api/settings", (SettingsRequest body) =>
 {
     lock (gate)
     {
+        var oldUsePakModsDir = settings.Current.UsePakModsDir;
         settings.Current.CheckGameRunning = body.CheckGameRunning;
         settings.Current.FixPakNumber = body.FixPakNumber;
+        settings.Current.UsePakModsDir = body.UsePakModsDir;
         settings.Current.InstallOption = body.InstallOption;
+        try
+        {
+            if (oldUsePakModsDir != body.UsePakModsDir)
+            {
+                service.SetPakModsMode(body.UsePakModsDir);
+            }
+        }
+        catch (Exception ex)
+        {
+            settings.Current.UsePakModsDir = oldUsePakModsDir;
+            var rollback = ApiMapper.Bootstrap(service, settings);
+            rollback.Status = ex.Message;
+            rollback.Error = true;
+            return Results.Json(rollback);
+        }
+
         settings.Save();
         return Results.Json(ApiMapper.Bootstrap(service, settings));
     }
@@ -410,7 +428,7 @@ static string ResolveDataRoot(string[] args)
 }
 
 internal sealed record PathRequest(string? Path);
-internal sealed record SettingsRequest(bool CheckGameRunning, bool FixPakNumber, int InstallOption);
+internal sealed record SettingsRequest(bool CheckGameRunning, bool FixPakNumber, bool UsePakModsDir, int InstallOption);
 internal sealed record ImportRequest(List<string>? Paths);
 internal sealed record EnableRequest(bool Enabled);
 internal sealed record DeltaRequest(int Delta);

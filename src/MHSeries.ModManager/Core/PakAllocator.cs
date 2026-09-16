@@ -178,7 +178,9 @@ public static class PakAllocator
 
     private static string Normalize(string path) => path.Replace('\\', '/');
 
-    private static string Md5Prefix(string path)
+    private static string Md5Prefix(string path) => PrefixHash(path);
+
+    internal static string PrefixHash(string path)
     {
         using var stream = File.OpenRead(path);
         var buffer = new byte[Math.Min(stream.Length, 1024 * 1024)];

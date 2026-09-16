@@ -61,6 +61,7 @@ internal static class ApiMapper
         LastGame = settings.LastGame,
         CheckGameRunning = settings.CheckGameRunning,
         FixPakNumber = settings.FixPakNumber,
+        UsePakModsDir = settings.UsePakModsDir,
         InstallOption = settings.InstallOption
     };
 
@@ -120,6 +121,8 @@ internal sealed class BootstrapDto
     public SettingsDto Settings { get; set; } = new();
     public List<GameDto> Games { get; set; } = [];
     public WorkspaceDto Workspace { get; set; } = new();
+    public string Status { get; set; } = "就绪";
+    public bool Error { get; set; }
 }
 
 internal sealed class WorkspaceDto
@@ -151,6 +154,7 @@ internal sealed class SettingsDto
     public GameId LastGame { get; set; }
     public bool CheckGameRunning { get; set; }
     public bool FixPakNumber { get; set; }
+    public bool UsePakModsDir { get; set; }
     public int InstallOption { get; set; }
 }
 
