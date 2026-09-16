@@ -1,3 +1,13 @@
+﻿# 双击 publish.bat 或右键"使用 PowerShell 运行"时会以 Bypass 策略自动重启本脚本；
+# 在已放行的终端里则直接执行。
+if ($MyInvocation.Line -notmatch "ExecutionPolicy") {
+    $isUnrestricted = (Get-ExecutionPolicy) -in @("Bypass", "Unrestricted")
+    if (-not $isUnrestricted) {
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "& '$PSCommandPath'"
+        exit $LASTEXITCODE
+    }
+}
+
 $ErrorActionPreference = "Stop"
 Set-Location -LiteralPath $PSScriptRoot
 
@@ -179,3 +189,9 @@ Write-Host ""
 Write-Host "Done"
 Write-Host "Version : $version"
 Write-Host "Zip     : $zipPath"
+
+# 双击运行时保持窗口打开，便于查看结果。
+if ($Host.Name -eq "ConsoleHost" -and [Environment]::UserInteractive) {
+    Write-Host ""
+    Read-Host "按回车键退出"
+}

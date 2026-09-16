@@ -59,7 +59,8 @@ function createWindow() {
     height: 900,
     minWidth: 1100,
     minHeight: 720,
-    backgroundColor: "#0A0D12",
+    backgroundColor: "#F2F6FB",
+    frame: false,
     autoHideMenuBar: true,
     icon: path.join(app.getAppPath(), "build/icon.ico"),
     webPreferences: {
@@ -75,6 +76,14 @@ function createWindow() {
     win.loadFile(path.join(__dirname, "../dist/index.html"));
   }
 }
+
+ipcMain.handle("win-minimize", () => win?.minimize());
+ipcMain.handle("win-toggle-maximize", () => {
+  if (!win) return;
+  if (win.isMaximized()) win.unmaximize();
+  else win.maximize();
+});
+ipcMain.handle("win-close", () => win?.close());
 
 ipcMain.handle("pick-mods", async () => {
   const result = await dialog.showOpenDialog(win, {

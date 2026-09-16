@@ -20,6 +20,17 @@ const state = {
 
 const app = document.querySelector("#app");
 
+import worldIcon from "./assets/icons/world.png";
+import riseIcon from "./assets/icons/rise.png";
+import wildsIcon from "./assets/icons/wilds.png";
+const gameIcons = { World: worldIcon, Rise: riseIcon, Wilds: wildsIcon };
+
+const iconGear = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Zm7.4-2.6.1-.9-.1-.9 1.9-1.5-1.8-3.2-2.3.8a7 7 0 0 0-1.6-.9L15.2 3h-3.7l-.4 2.3c-.6.2-1.1.5-1.6.9l-2.3-.9-1.8 3.2 1.9 1.5-.1.9.1.9-1.9 1.5 1.8 3.2 2.3-.8c.5.4 1 .7 1.6.9l.4 2.3h3.7l.4-2.3c.6-.2 1.1-.5 1.6-.9l2.3.8 1.8-3.2-1.9-1.5Z"/></svg>`;
+const iconPlay = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg>`;
+const iconMinimize = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>`;
+const iconMaximize = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>`;
+const iconClose = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>`;
+
 function apiUrl(path) {
   return `${state.api}${path}`;
 }
@@ -216,48 +227,35 @@ function render() {
     <div class="app">
       <header class="titlebar">
         <div class="brand"><span class="mark">M</span>MH-MOD-MANAGER</div>
-        <div class="muted">MOD WORKBENCH / MONSTER HUNTER</div>
+        <div class="win-controls">
+          <button class="win-btn" data-action="win-minimize" title="最小化" aria-label="最小化">${iconMinimize}</button>
+          <button class="win-btn" data-action="win-maximize" title="最大化/还原" aria-label="最大化/还原">${iconMaximize}</button>
+          <button class="win-btn close" data-action="win-close" title="关闭" aria-label="关闭">${iconClose}</button>
+        </div>
       </header>
       <div class="shell">
         <aside class="sidebar">
-          <div>
-            <div class="eyebrow">GAME LIBRARY</div>
-            <div class="muted" style="margin-top:6px">选择要管理的游戏</div>
-          </div>
-          <div>
-            ${state.games.map(item => `
-              <button class="game${game?.id === item.id ? " active" : ""}" data-action="select-game" data-id="${item.id}">
+          ${state.games.map(item => {
+            const icon = gameIcons[item.id];
+            return `
+              <div class="game${game?.id === item.id ? " active" : ""}" data-action="select-game" data-id="${item.id}" role="button" tabindex="0">
                 <span class="bar"></span>
-                <span class="initial">${esc(item.shortName.slice(0, 1))}</span>
+                <span class="game-icon">${icon ? `<img src="${icon}" alt="" />` : esc(item.shortName.slice(0, 1))}</span>
                 <span>
                   <div>${esc(item.shortName)}</div>
                   <div class="muted">${item.installed ? "已安装" : "未配置"}</div>
                 </span>
-                ${item.installed ? '<span class="dot"></span>' : "<span></span>"}
-              </button>
-            `).join("")}
-          </div>
-          <div class="card">
-            <div class="eyebrow">QUICK STATUS</div>
-            <div class="kv"><span class="muted">当前游戏</span><span>${game?.installed ? "已找到游戏" : "等待设置路径"}</span></div>
-            <div class="kv"><span class="muted">部署模式</span><span>${esc(game?.deployRoot ?? "")}</span></div>
-            <div class="kv"><span class="muted">MOD 状态</span><span style="color:var(--gold)">${state.mods.filter(m => m.enabled).length} / ${state.mods.length} 已启用</span></div>
-          </div>
+                <span class="game-tools">
+                  ${item.installed ? '<span class="dot"></span>' : ""}
+                  <button class="icon" data-action="game-settings" data-id="${item.id}" title="设置" aria-label="设置">${iconGear}</button>
+                  <button class="icon" data-action="game-launch" data-id="${item.id}" title="启动游戏" aria-label="启动游戏" ${item.installed ? "" : "disabled"}>${iconPlay}</button>
+                </span>
+              </div>`;
+          }).join("")}
         </aside>
         <main class="workspace">
           <div class="toolbar">
-            <div>
-              <h1 class="h1">${esc(game?.displayName ?? "mh-mod-manager")}</h1>
-              <div class="muted" style="margin-top:7px">${esc(game?.pakState ?? "")} · ${esc(game?.path || "未设置游戏目录")}</div>
-            </div>
-            <div class="actions">
-              <button class="btn" data-action="refresh" ${state.busy ? "disabled" : ""}>刷新</button>
-              <button class="btn" data-action="create-group" ${state.busy ? "disabled" : ""}>新建分组</button>
-              <button class="btn" data-action="open-settings">设置</button>
-              <button class="btn" data-action="open-folder" ${!game?.path || state.busy ? "disabled" : ""}>打开目录</button>
-              <button class="btn" data-action="launch" ${!game?.installed || state.busy ? "disabled" : ""}>启动游戏</button>
-              <button class="primary" data-action="import" ${state.busy ? "disabled" : ""}>导入</button>
-            </div>
+            <h1 class="h1">${esc(game?.displayName ?? "mh-mod-manager")}</h1>
           </div>
           <div class="searchrow">
             <label class="search">
@@ -266,10 +264,12 @@ function render() {
             </label>
             <div class="stats">
               <div class="stat"><b>${state.mods.length}</b><span class="muted">全部</span></div>
-              <div class="stat"><b style="color:var(--gold)">${state.mods.filter(m => m.enabled).length}</b><span class="muted">已启用</span></div>
+              <div class="stat"><b style="color:var(--accent)">${state.mods.filter(m => m.enabled).length}</b><span class="muted">已启用</span></div>
             </div>
           </div>
           <div class="batch card">
+            <button class="btn" data-action="refresh" ${state.busy ? "disabled" : ""}>刷新</button>
+            <button class="btn" data-action="create-group" ${state.busy ? "disabled" : ""}>新建分组</button>
             <button class="btn" data-action="select-all">全选</button>
             <button class="btn" data-action="clear-selection">清除选择</button>
             <span class="muted">已选 ${selected.length} 个 MOD</span>
@@ -278,6 +278,7 @@ function render() {
               ${state.groups.map(group => `<option value="${group.id}" ${group.id === state.moveTarget ? "selected" : ""}>${esc(group.name)}</option>`).join("")}
             </select>
             <button class="primary" data-action="move-selected" ${state.busy || selected.length === 0 ? "disabled" : ""}>批量移动</button>
+            <button class="primary" data-action="import" ${state.busy ? "disabled" : ""}>导入</button>
           </div>
           <div class="list">
             ${visibleGroups().map(group => {
@@ -325,14 +326,12 @@ function render() {
         </main>
         <aside class="detail">
           ${pane === "settings" ? `
-            <div class="eyebrow">WORKSPACE SETTINGS</div>
-            <h2 class="h1" style="font-size:21px;margin:8px 0 16px">工作区设置</h2>
             <div class="field">
               <span>游戏目录</span>
               <div class="muted">${esc(game?.path || "未设置游戏目录")}</div>
-              <div class="actions">
-                <button class="btn" data-action="pick-game">选择目录</button>
-                <button class="btn" data-action="open-folder" ${game?.path ? "" : "disabled"}>打开目录</button>
+              <div class="actions stack">
+                <button class="btn" data-action="pick-game">选择游戏目录</button>
+                <button class="btn" data-action="open-folder" ${game?.path ? "" : "disabled"}>打开游戏目录</button>
               </div>
             </div>
             <div class="field">
@@ -350,13 +349,12 @@ function render() {
                 <option value="2" ${state.settings.installOption === 2 ? "selected" : ""}>移动到工作区</option>
               </select>
             </div>
-            <div class="card muted">世界使用 nativePC 覆盖文件。崛起与荒野使用 natives、REFramework 以及游戏 PAK 补丁文件。</div>
           ` : pane === "mod" && active ? `
             <div class="eyebrow">MOD PREVIEW</div>
             <h2 class="h1" style="font-size:21px;margin:8px 0 0">${esc(active.name)}</h2>
             <div class="preview-box">${active.hasPreview ? `<img src="${esc(previewSrc(active))}" alt="" />` : '<span class="muted">没有预览图</span>'}</div>
              <div class="card">
-               <div class="kv"><span class="muted">类型</span><span style="color:var(--gold)">${esc(active.category)}</span></div>
+                <div class="kv"><span class="muted">类型</span><span style="color:var(--accent)">${esc(active.category)}</span></div>
                <div class="kv"><span class="muted">版本</span><span>${esc(active.version)}</span></div>
               <div class="kv"><span class="muted">作者</span><span>${esc(active.author)}</span></div>
               <div class="kv"><span class="muted">文件</span><span>${active.fileCount} 个文件</span></div>
@@ -374,19 +372,11 @@ function render() {
                <button class="btn danger" data-action="uninstall" data-id="${active.id}" title="删除 MOD" ${state.busy ? "disabled" : ""}><svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><span>删除 MOD</span></button>
              </div>
            ` : `
-            <div class="eyebrow">WORKSPACE</div>
-            <h2 class="h1" style="font-size:21px;margin:8px 0 16px">当前工作区</h2>
-            <div class="card">
-              <div class="kv"><span class="muted">游戏状态</span><span style="color:var(--ok)">${game?.installed ? "已找到游戏" : "等待设置路径"}</span></div>
-              <div class="kv"><span class="muted">安装方式</span><span>${esc(game?.deployRoot ?? "")}</span></div>
-              <div class="kv"><span class="muted">PAK 策略</span><span>${esc(game?.pakState ?? "")}</span></div>
-            </div>
-            <p class="muted">靠后的分组覆盖靠前的分组。勾选后可批量移动，点击 MOD 查看预览。</p>
-          `}
+            <div class="empty-detail"></div>
+           `}
         </aside>
       </div>
       <footer class="footer">
-        <span class="muted">mh-mod-manager / Electron workspace</span>
         <span class="muted">${state.busy ? "处理中..." : esc(state.status)}</span>
         <button class="btn" data-action="clean" ${state.busy || !game?.installed ? "disabled" : ""}>清理部署文件</button>
       </footer>
@@ -425,9 +415,34 @@ function onClick(event) {
     run(() => request(`/api/games/${target.dataset.id}/select`, { method: "POST" }));
     return;
   }
-  if (action === "open-settings") {
-    state.pane = state.pane === "settings" ? "info" : "settings";
-    render();
+  if (action === "game-settings") {
+    run(async () => {
+      const workspace = await request(`/api/games/${target.dataset.id}/select`, { method: "POST" });
+      state.pane = "settings";
+      return workspace;
+    });
+    return;
+  }
+  if (action === "game-launch") {
+    run(async () => {
+      await request(`/api/games/${target.dataset.id}/select`, { method: "POST" });
+      const result = await request(`/api/games/${target.dataset.id}/launch`, { method: "POST" });
+      const workspace = await request(`/api/workspace/${target.dataset.id}`);
+      workspace.status = result.status || "已通过 Steam 启动游戏";
+      return workspace;
+    });
+    return;
+  }
+  if (action === "win-minimize") {
+    window.mhModManager?.minimize?.();
+    return;
+  }
+  if (action === "win-maximize") {
+    window.mhModManager?.toggleMaximize?.();
+    return;
+  }
+  if (action === "win-close") {
+    window.mhModManager?.close?.();
     return;
   }
   if (action === "open-mod") {
@@ -459,15 +474,6 @@ function onClick(event) {
   }
   if (action === "import") {
     importMods();
-    return;
-  }
-  if (action === "launch") {
-    run(async () => {
-      const result = await request(`/api/games/${gameId}/launch`, { method: "POST" });
-      const workspace = await request(`/api/workspace/${gameId}`);
-      workspace.status = result.status || "已通过 Steam 启动游戏";
-      return workspace;
-    });
     return;
   }
   if (action === "pick-game") {

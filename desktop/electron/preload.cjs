@@ -6,6 +6,9 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
   pickUpdate: () => ipcRenderer.invoke("pick-update"),
   pickFolder: () => ipcRenderer.invoke("pick-folder"),
   openPath: folder => ipcRenderer.invoke("open-path", folder),
+  minimize: () => ipcRenderer.invoke("win-minimize"),
+  toggleMaximize: () => ipcRenderer.invoke("win-toggle-maximize"),
+  close: () => ipcRenderer.invoke("win-close"),
   filePath: file => {
     try { return webUtils.getPathForFile(file); }
     catch { return file.path || ""; }
