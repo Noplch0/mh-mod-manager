@@ -339,6 +339,21 @@ public sealed class ModServiceTests : IDisposable
     }
 
     [Fact]
+    public void LegacyNexusFilenameSetsNameIdAndHomeUrl()
+    {
+        var bundle = Path.Combine(_root, "Infinite Consumables-20-1-3-3-1767490208");
+        Directory.CreateDirectory(bundle);
+        WriteFile(bundle, "nativePC/shared.bin", "one");
+
+        var result = _service.Import(_game, bundle);
+        var mod = Assert.Single(result.Mods);
+
+        Assert.Equal("Infinite Consumables", mod.DisplayName);
+        Assert.Equal(20, mod.NexusId);
+        Assert.Equal($"https://www.nexusmods.com/{_game.NexusSlug}/mods/20", mod.HomeUrl);
+    }
+
+    [Fact]
     public void UpdateSingleArchiveReplacesFilesAndKeepsIdentity()
     {
         var original = _service.Install(_game, CreateParsed("old", "old-data"));

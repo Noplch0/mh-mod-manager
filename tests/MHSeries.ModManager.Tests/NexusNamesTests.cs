@@ -59,6 +59,38 @@ public sealed class NexusNamesTests
     }
 
     [Theory]
+    [InlineData("Infinite Consumables-20-1-3-3-1767490208", "Infinite Consumables", 20, "1.3.3")]
+    [InlineData("Layered Armor and Weapon Unlocker-1139-1-5-1771391477", "Layered Armor and Weapon Unlocker", 1139, "1.5")]
+    [InlineData("Some Mod-42-1767490208", "Some Mod", 42, "")]
+    [InlineData("Cool Mod-7-v2-1767490208", "Cool Mod", 7, "2")]
+    [InlineData("Dotted Mod-9-1.5-1767490208", "Dotted Mod", 9, "1.5")]
+    [InlineData("My Mod-123-v3", "My Mod", 123, "3")]
+    public void LegacyDashFilenamesAreParsed(string stem, string name, int id, string version)
+    {
+        var info = NexusNames.ParseNexusStem(stem);
+
+        Assert.NotNull(info);
+        Assert.Equal(name, info!.Value.Name);
+        Assert.Equal(id, info.Value.ModId);
+        Assert.Equal(version, info.Value.Version);
+    }
+
+    [Fact]
+    public void ApplyHandlesLegacyTimestampFilenames()
+    {
+        var mod = new ParsedMod
+        {
+            Name = "modinfo里的名称",
+            SourceFile = "Infinite Consumables-20-1-3-3-1767490208.zip"
+        };
+        NexusNames.Apply(mod, mod.SourceFile);
+
+        Assert.Equal("modinfo里的名称", mod.Name);
+        Assert.Equal(20, mod.NexusId);
+        Assert.Equal("1.3.3", mod.Version);
+    }
+
+    [Theory]
     [InlineData(GameId.World, "monsterhunterworld")]
     [InlineData(GameId.Rise, "monsterhunterrise")]
     [InlineData(GameId.Wilds, "monsterhunterwilds")]
