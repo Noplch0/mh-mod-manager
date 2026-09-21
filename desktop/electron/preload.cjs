@@ -6,6 +6,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
   pickUpdate: () => ipcRenderer.invoke("pick-update"),
   pickFolder: () => ipcRenderer.invoke("pick-folder"),
   openPath: folder => ipcRenderer.invoke("open-path", folder),
+  openExternal: url => ipcRenderer.invoke("open-external", url),
   minimize: () => ipcRenderer.invoke("win-minimize"),
   toggleMaximize: () => ipcRenderer.invoke("win-toggle-maximize"),
   close: () => ipcRenderer.invoke("win-close"),

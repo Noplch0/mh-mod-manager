@@ -20,10 +20,37 @@ public sealed class ModRecord
     public string PreviewImage { get; set; } = "";
     public List<string> Files { get; set; } = [];
     public Dictionary<string, string> OverwriteFiles { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<ModComponent> Components { get; set; } = [];
 
+    /// <summary>组件化 MOD：一个记录内含多个可独立开关的组件。</summary>
+    [JsonIgnore]
+    public bool IsBundle => Components.Count > 0;
+
+    /// <summary>
+    /// 存储相对路径 → 游戏目录相对路径。pak_mods 映射优先；
+    /// 组件化记录的存储路径带组件前缀（c{n}/...），部署时剥掉。
+    /// </summary>
     public string DeployPath(string relative)
     {
         var key = relative.Replace('\\', '/');
-        return OverwriteFiles.TryGetValue(key, out var mapped) ? mapped : relative;
+        if (OverwriteFiles.TryGetValue(key, out var mapped))
+        {
+            return mapped;
+        }
+
+        return IsBundle ? ContentRelative(key) : key;
+    }
+
+    /// <summary>剥掉组件前缀后的部署相对路径；非组件化记录原样返回。</summary>
+    public string ContentRelative(string stored)
+    {
+        if (!IsBundle)
+        {
+            return stored.Replace('\\', '/');
+        }
+
+        var key = stored.Replace('\\', '/');
+        var separator = key.IndexOf('/');
+        return separator > 0 ? key[(separator + 1)..] : key;
     }
 }

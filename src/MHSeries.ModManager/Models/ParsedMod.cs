@@ -12,6 +12,8 @@ public sealed class ParsedMod
     public int NexusId { get; set; }
     public string HomeUrl { get; set; } = "";
     public string Category { get; set; } = "";
+    /// <summary>modinfo.ini 的 NameAsBundle 键：组件化导入时作为整个 mod 的显示名。</summary>
+    public string BundleName { get; set; } = "";
     public List<ParsedFile> Files { get; set; } = [];
 }
 

@@ -45,15 +45,6 @@ public sealed class ModLayoutParserTests : IDisposable
         Assert.Equal("", ModLayoutParser.DetectPrefix(GameProfile.Get(GameId.Wilds), wilds));
     }
 
-    [Theory]
-    [InlineData("re_chunk_000.pak.patch_001.pak", 1)]
-    [InlineData("re_chunk_000.pak.sub_000.pak.patch_006.pak", 6)]
-    [InlineData("not-a-patch.pak", 0)]
-    public void PakNumbersFollowTheOriginalNamingRules(string name, int expected)
-    {
-        Assert.Equal(expected, ModLayoutParser.ParsePakNumber(name));
-    }
-
     [Fact]
     public void NexusNamesAreExtractedFromCommonFileNames()
     {
@@ -256,85 +247,19 @@ public sealed class ModLayoutParserTests : IDisposable
     }
 
     [Fact]
-    public void BackupKeepsTheOriginalAcrossMultipleOverwrites()
-    {
-        var appId = Random.Shared.Next(8_000_000, 9_000_000);
-        var game = new GameProfile(GameId.World, "test", "test", "test", "test.exe", appId, "test", "", 0);
-        var gameRoot = CreateRoot("nativePC");
-        var relative = "nativePC/test.bin";
-        var destination = WriteFile(gameRoot, relative, "original");
-        var source = WriteFile(gameRoot, "mod.bin", "first-mod");
-        var backups = new BackupStore(game);
-
-        backups.OnDeploy(relative, destination, source);
-        File.WriteAllText(destination, "first-mod");
-        backups.OnDeploy(relative, destination, source);
-        File.WriteAllText(destination, "second-mod");
-        File.Delete(destination);
-        backups.OnRemove(destination, relative, keepBackup: false, source);
-
-        Assert.Equal("original", File.ReadAllText(destination));
-        if (Directory.Exists(AppPaths.GameDir(appId)))
-        {
-            Directory.Delete(AppPaths.GameDir(appId), true);
-        }
-    }
-
-    [Fact]
-    public void WildsPakAllocatorAvoidsExistingGamePatchNumbers()
-    {
-        var root = CreateRoot();
-        WriteFile(root, "re_chunk_000.pak.sub_000.pak.patch_007.pak", "game-pak");
-        var mod = new ModRecord { Id = 1001, Enabled = true, Files = ["source.pak"] };
-
-        PakAllocator.Assign(GameProfile.Get(GameId.Wilds), root, [mod], mod, true);
-
-        Assert.Equal("re_chunk_000.pak.sub_000.pak.patch_008.pak", mod.OverwriteFiles["source.pak"]);
-    }
-
-    [Fact]
-    public void PakAllocatorFollowsTheHighestExistingGamePatch()
-    {
-        var root = CreateRoot();
-        WriteFile(root, "re_chunk_000.pak", "base");
-        WriteFile(root, "re_chunk_000.pak.sub_000.pak", "sub");
-        WriteFile(root, "re_chunk_000.pak.sub_000.pak.patch_009.pak", "official");
-        WriteFile(root, "re_chunk_000.pak.sub_000.pak.patch_010.pak", "official-next");
-        var mod = new ModRecord { Id = 1001, Enabled = true, Files = ["source.pak"] };
-
-        PakAllocator.Assign(GameProfile.Get(GameId.Wilds), root, [mod], mod, true);
-
-        Assert.Equal("re_chunk_000.pak.sub_000.pak.patch_011.pak", mod.OverwriteFiles["source.pak"]);
-    }
-
-    [Fact]
-    public void RisePakAllocatorDoesNotUseAFixedStartingNumber()
-    {
-        var root = CreateRoot();
-        WriteFile(root, "re_chunk_000.pak.patch_003.pak", "official");
-        var mod = new ModRecord { Id = 1001, Enabled = true, Files = ["source.pak"] };
-
-        PakAllocator.Assign(GameProfile.Get(GameId.Rise), root, [mod], mod, true);
-
-        Assert.Equal("re_chunk_000.pak.patch_004.pak", mod.OverwriteFiles["source.pak"]);
-    }
-
-    [Fact]
-    public void RawPakNameIsAcceptedForStorageAndMappedBeforeDeployment()
+    public void RawPakNameIsAcceptedForStorageButMustBeMappedIntoPakModsForDeployment()
     {
         var root = CreateRoot();
         WriteFile(root, "visual-overhaul.pak", "pak-content");
         var game = GameProfile.Get(GameId.Rise);
         var parsed = ModLayoutParser.Parse(game, WriteFile(root, "source.tmp", ""), root);
         var item = Assert.Single(parsed.Files);
-        var mod = new ModRecord { Id = 1001, Enabled = true, Files = [item.RelativeDest] };
-
-        PakAllocator.Assign(game, root, [mod], mod, true);
 
         Assert.Equal("visual-overhaul.pak", item.RelativeDest);
         Assert.True(ModLayoutParser.IsSafeStoredPath(item.RelativeDest));
-        Assert.Equal("re_chunk_000.pak.patch_001.pak", mod.DeployPath(item.RelativeDest));
-        Assert.True(ModLayoutParser.IsSafeDeploymentPath(game, mod.DeployPath(item.RelativeDest)));
+        // 未映射的根目录 pak 不是托管目标，部署会被阻止；映射后进入 pak_mods。
+        Assert.False(PakModsManager.IsManagedTarget(item.RelativeDest));
+        Assert.True(PakModsManager.IsManagedTarget("pak_mods/X0000-visual-overhaul.pak"));
     }
 
     [Fact]

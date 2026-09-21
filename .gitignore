@@ -12,3 +12,7 @@ desktop/release/
 _extract/
 src/MHSeries.ModManager/Data/Equipment/*.list.txt
 sample.exe
+.workbuddy/
+.zcode/
+.zcodeignore
+example_mod/

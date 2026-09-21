@@ -38,8 +38,9 @@ public sealed class ModService
         {
             mods = ModRepository.LoadAll(game);
             var groups = ModRepository.LoadGroups(game, mods);
-            _groups[game.Id] = groups;
             ModRepository.FixIndex(game, mods, groups);
+            BundleMigration.Migrate(game, mods, groups);
+            _groups[game.Id] = groups;
             _cache[game.Id] = mods;
         }
 
@@ -74,34 +75,12 @@ public sealed class ModService
             throw new InvalidOperationException("未能识别这个 MOD 的文件结构");
         }
 
-        ModGroup? group = null;
-        if (units.Count > 1)
+        if (units.Count == 1)
         {
-            group = CreateGroup(game, bundleName);
+            return new ImportBatch { Mods = [Install(game, units[0], null, keepSource: true)] };
         }
 
-        var installed = new List<ModRecord>();
-        Exception? error = null;
-        for (var i = 0; i < units.Count; i++)
-        {
-            var parsed = units[i];
-            try
-            {
-                installed.Add(Install(game, parsed, group?.Id, keepSource: i == units.Count - 1));
-            }
-            catch (Exception ex)
-            {
-                error = ex;
-                TryDelete(parsed.StagingDir);
-            }
-        }
-
-        if (installed.Count == 0)
-        {
-            throw error ?? new InvalidOperationException("未能识别这个 MOD 的文件结构");
-        }
-
-        return new ImportBatch { Mods = installed, Group = group };
+        return new ImportBatch { Mods = [InstallBundle(game, path, units, bundleName)] };
     }
 
     public ImportBatch Update(GameProfile game, ModRecord existing, string path, IProgress<int>? progress = null)
@@ -118,30 +97,8 @@ public sealed class ModService
             return new ImportBatch { Mods = [existing] };
         }
 
-        Uninstall(game, existing);
-        var group = CreateGroup(game, bundleName);
-        var installed = new List<ModRecord>();
-        Exception? error = null;
-        for (var i = 0; i < units.Count; i++)
-        {
-            var parsed = units[i];
-            try
-            {
-                installed.Add(Install(game, parsed, group.Id, keepSource: i == units.Count - 1));
-            }
-            catch (Exception ex)
-            {
-                error = ex;
-                TryDelete(parsed.StagingDir);
-            }
-        }
-
-        if (installed.Count == 0)
-        {
-            throw error ?? new InvalidOperationException("未能识别这个 MOD 的文件结构");
-        }
-
-        return new ImportBatch { Mods = installed, Group = group };
+        ReplaceBundle(game, existing, path, units, bundleName);
+        return new ImportBatch { Mods = [existing] };
     }
 
     public void Replace(GameProfile game, ModRecord existing, ParsedMod parsed)
@@ -159,11 +116,18 @@ public sealed class ModService
             Directory.Delete(destDir, true);
         }
 
+        var oldCovers = Path.Combine(AppPaths.ModDir(game.SteamAppId, existing.Id), "covers");
+        if (Directory.Exists(oldCovers))
+        {
+            Directory.Delete(oldCovers, true);
+        }
+
         try
         {
             Directory.CreateDirectory(destDir);
             existing.Files.Clear();
             existing.OverwriteFiles.Clear();
+            existing.Components.Clear();
             existing.Name = parsed.Name;
             if (string.IsNullOrWhiteSpace(existing.DisplayName))
             {
@@ -220,6 +184,193 @@ public sealed class ModService
         {
             SetEnabled(game, existing, true);
         }
+    }
+
+    /// <summary>多单元压缩包导入为一个组件化 MOD：组件 = 顶层文件夹 / 散装 pak。</summary>
+    private ModRecord InstallBundle(GameProfile game, string sourcePath, List<ParsedMod> units, string bundleName)
+    {
+        foreach (var unit in units)
+        {
+            ValidateParsedMod(game, unit);
+        }
+
+        var mods = GetMods(game);
+        var groups = GetGroups(game);
+        var record = new ModRecord
+        {
+            Name = bundleName,
+            DisplayName = BundleDisplayName(units, bundleName),
+            Version = units.Select(unit => unit.Version).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "",
+            Author = units.Select(unit => unit.Author).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "",
+            Category = units.Select(unit => unit.Category).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "",
+            NexusId = units.Select(unit => unit.NexusId).FirstOrDefault(id => id > 0),
+            InstallTime = DateTimeOffset.Now
+        };
+        if (record.NexusId > 0)
+        {
+            record.HomeUrl = NexusNames.GetNexusUrl(game, record.NexusId);
+        }
+
+        ModRepository.MakeId(mods, groups, record);
+        var filesDir = AppPaths.ModFilesDir(game.SteamAppId, record.Id);
+        var coversDir = Path.Combine(AppPaths.ModDir(game.SteamAppId, record.Id), "covers");
+        try
+        {
+            Directory.CreateDirectory(filesDir);
+            Directory.CreateDirectory(coversDir);
+            var nextId = 1;
+            foreach (var unit in units)
+            {
+                var component = new ModComponent { Id = nextId++, Name = unit.Name, Enabled = false };
+                CopyComponentFiles(unit, component, filesDir, coversDir, record);
+                record.Components.Add(component);
+            }
+
+            record.SourceFile = KeepSource(sourcePath, record.DisplayName);
+            ModRepository.Save(game, record);
+            mods.Add(record);
+            return record;
+        }
+        catch
+        {
+            TryDelete(AppPaths.ModDir(game.SteamAppId, record.Id));
+            throw;
+        }
+        finally
+        {
+            foreach (var unit in units)
+            {
+                TryDelete(unit.StagingDir);
+            }
+        }
+    }
+
+    /// <summary>用新压缩包原地重建组件化 MOD（普通 MOD 转组件化也走这里）。</summary>
+    private void ReplaceBundle(GameProfile game, ModRecord existing, string sourcePath, List<ParsedMod> units, string bundleName)
+    {
+        foreach (var unit in units)
+        {
+            ValidateParsedMod(game, unit);
+        }
+
+        var wasEnabled = existing.Enabled;
+        if (wasEnabled)
+        {
+            SetEnabled(game, existing, false);
+        }
+
+        var modDir = AppPaths.ModDir(game.SteamAppId, existing.Id);
+        var filesDir = AppPaths.ModFilesDir(game.SteamAppId, existing.Id);
+        var coversDir = Path.Combine(modDir, "covers");
+        try
+        {
+            if (Directory.Exists(filesDir))
+            {
+                Directory.Delete(filesDir, true);
+            }
+
+            if (Directory.Exists(coversDir))
+            {
+                Directory.Delete(coversDir, true);
+            }
+
+            Directory.CreateDirectory(filesDir);
+
+            // 按组件名保留旧的开关状态，没匹配上的保持关闭。
+            var previousByName = existing.Components
+                .Where(component => !string.IsNullOrWhiteSpace(component.Name))
+                .GroupBy(component => component.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First().Enabled, StringComparer.OrdinalIgnoreCase);
+
+            existing.Files.Clear();
+            existing.OverwriteFiles.Clear();
+            existing.Components.Clear();
+            existing.Name = bundleName;
+            if (string.IsNullOrWhiteSpace(existing.DisplayName))
+            {
+                existing.DisplayName = BundleDisplayName(units, bundleName);
+            }
+
+            existing.Version = units.Select(unit => unit.Version).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "";
+            existing.Author = units.Select(unit => unit.Author).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "";
+            existing.Category = units.Select(unit => unit.Category).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "";
+            existing.NexusId = units.Select(unit => unit.NexusId).FirstOrDefault(id => id > 0);
+            existing.HomeUrl = "";
+            existing.InstallTime = DateTimeOffset.Now;
+            existing.PreviewImage = "";
+            if (existing.NexusId > 0)
+            {
+                existing.HomeUrl = NexusNames.GetNexusUrl(game, existing.NexusId);
+            }
+
+            Directory.CreateDirectory(coversDir);
+            var nextId = 1;
+            foreach (var unit in units)
+            {
+                var component = new ModComponent { Id = nextId++, Name = unit.Name };
+                component.Enabled = previousByName.TryGetValue(component.Name, out var enabled) && enabled;
+                CopyComponentFiles(unit, component, filesDir, coversDir, existing);
+                existing.Components.Add(component);
+            }
+
+            existing.SourceFile = KeepSource(sourcePath, existing.DisplayName);
+            ModRepository.Save(game, existing);
+        }
+        finally
+        {
+            foreach (var unit in units)
+            {
+                TryDelete(unit.StagingDir);
+            }
+        }
+
+        if (wasEnabled)
+        {
+            SetEnabled(game, existing, true);
+        }
+    }
+
+    private static void CopyComponentFiles(ParsedMod unit, ModComponent component, string filesDir, string coversDir, ModRecord record)
+    {
+        var prefix = $"c{component.Id}/";
+        foreach (var file in unit.Files)
+        {
+            var stored = prefix + file.RelativeDest;
+            var dest = Path.Combine(filesDir, stored.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            CopyVerified(file.SourcePath, dest);
+            component.Files.Add(stored);
+            record.Files.Add(stored);
+        }
+
+        if (!string.IsNullOrWhiteSpace(unit.PreviewSource) && File.Exists(unit.PreviewSource))
+        {
+            var ext = Path.GetExtension(unit.PreviewSource);
+            if (!IsPreviewExtension(ext))
+            {
+                ext = ".png";
+            }
+
+            var cover = Path.Combine(coversDir, $"c{component.Id}{ext.ToLowerInvariant()}");
+            File.Copy(unit.PreviewSource, cover, true);
+            if (string.IsNullOrEmpty(record.PreviewImage))
+            {
+                record.PreviewImage = cover;
+            }
+        }
+    }
+
+    private static string BundleDisplayName(List<ParsedMod> units, string bundleName)
+    {
+        var fromIni = units.Select(unit => unit.BundleName).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        if (!string.IsNullOrWhiteSpace(fromIni))
+        {
+            return fromIni.Trim();
+        }
+
+        var parsed = NexusNames.ParseNexusDownloadStem(bundleName) ?? NexusNames.ParseNexusStem(bundleName);
+        var name = parsed?.Name ?? bundleName;
+        return string.IsNullOrWhiteSpace(name) ? "组件化 MOD" : name.Trim();
     }
 
     public List<ParsedMod> ParseImportUnits(GameProfile game, string path, IProgress<int>? progress, out string bundleName)
@@ -351,37 +502,22 @@ public sealed class ModService
         var mods = GetMods(game);
         var oldEnabled = mod.Enabled;
         var oldMappings = new Dictionary<string, string>(mod.OverwriteFiles, StringComparer.OrdinalIgnoreCase);
-        var backups = new BackupStore(game);
         try
         {
             mod.Enabled = enable;
             if (enable && game.UsesPakPatches)
             {
-                if (PakModsManager.IsEnabled(_settings))
-                {
-                    PakModsManager.AssignForEnable(game, _settings, gamePath, mods, GetGroups(game));
-                }
-                else if (_settings.Current.FixPakNumber)
-                {
-                    PakAllocator.Assign(game, gamePath, mods, mod, enable);
-                }
+                PakModsManager.AssignForEnable(game, gamePath, mods, GetGroups(game));
             }
 
             ValidateEnabledMods(game, mods, mod, enable);
             if (!enable)
             {
-                Deploy(game, gamePath, mod, enable: false, backups);
+                Deploy(game, gamePath, mod, enable: false);
                 if (game.UsesPakPatches)
                 {
-                    if (PakModsManager.IsEnabled(_settings))
-                    {
-                        // 重新排布其余启用 MOD 的 X 编号。
-                        PakModsManager.AssignForEnable(game, _settings, gamePath, mods, GetGroups(game));
-                    }
-                    else
-                    {
-                        PakAllocator.Clear(mod);
-                    }
+                    // 重新排布其余启用 MOD 的 X 编号。
+                    PakModsManager.AssignForEnable(game, gamePath, mods, GetGroups(game));
                 }
             }
 
@@ -396,7 +532,7 @@ public sealed class ModService
                     continue;
                 }
 
-                Deploy(game, gamePath, item, enable: true, backups);
+                Deploy(game, gamePath, item, enable: true);
             }
 
             if (!enable)
@@ -417,7 +553,7 @@ public sealed class ModService
                         mod.OverwriteFiles[mapping.Key] = mapping.Value;
                     }
 
-                    Deploy(game, gamePath, mod, enable: false, backups);
+                    Deploy(game, gamePath, mod, enable: false);
                 }
                 catch
                 {
@@ -434,7 +570,7 @@ public sealed class ModService
             ModRepository.Save(game, mod);
             try
             {
-                RedeployEnabled(game, gamePath, mods, backups);
+                RedeployEnabled(game, gamePath, mods);
             }
             catch
             {
@@ -442,37 +578,6 @@ public sealed class ModService
 
             throw;
         }
-    }
-
-    public void SetPakModsMode(bool enabled)
-    {
-        foreach (var game in GameProfile.All.Where(game => game.UsesPakPatches))
-        {
-            SetPakModsMode(game, enabled);
-        }
-    }
-
-    public void SetPakModsMode(GameProfile game, bool enabled)
-    {
-        if (!game.UsesPakPatches)
-        {
-            return;
-        }
-
-        var gamePath = ResolveGamePath(game);
-        if (string.IsNullOrWhiteSpace(gamePath) || !Directory.Exists(gamePath))
-        {
-            return;
-        }
-
-        if (_settings.Current.CheckGameRunning && IsGameRunning(game, gamePath))
-        {
-            throw new InvalidOperationException($"游戏正在运行，请先关闭游戏：{game.DisplayName}");
-        }
-
-        var mods = GetMods(game);
-        PakModsManager.SetPakModsMode(game, _settings, gamePath, enabled, mods, GetGroups(game), () =>
-            RedeployEnabled(game, gamePath, mods, new BackupStore(game)));
     }
 
     public void Uninstall(GameProfile game, ModRecord mod)
@@ -545,11 +650,11 @@ public sealed class ModService
 
         mod.DisplayName = name.Trim();
         ModRepository.Save(game, mod);
-        if (mod.Enabled && game.UsesPakPatches && PakModsManager.IsEnabled(_settings))
+        if (mod.Enabled && game.UsesPakPatches)
         {
             var gamePath = RequireGamePath(game);
-            PakModsManager.Sync(game, _settings, gamePath, GetMods(game), GetGroups(game));
-            Deploy(game, gamePath, mod, enable: true, new BackupStore(game));
+            PakModsManager.Sync(game, gamePath, GetMods(game), GetGroups(game));
+            Deploy(game, gamePath, mod, enable: true);
         }
     }
 
@@ -566,7 +671,26 @@ public sealed class ModService
         }
 
         var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
-        var changed = EquipmentRemapper.Apply(game.Id, filesDir, mod.Files, kind, fromId, toId, isPfb, withTex);
+        var changed = 0;
+        if (mod.IsBundle)
+        {
+            // 组件化记录：逐个组件目录运行改写，组件内的路径不带前缀才能命中装备模式。
+            foreach (var component in mod.Components)
+            {
+                var prefix = $"c{component.Id}/";
+                var componentFiles = component.Files
+                    .Where(file => file.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    .Select(file => file[prefix.Length..])
+                    .ToList();
+                changed += EquipmentRemapper.Apply(game.Id, Path.Combine(filesDir, prefix), componentFiles,
+                    kind, fromId, toId, isPfb, withTex);
+            }
+        }
+        else
+        {
+            changed = EquipmentRemapper.Apply(game.Id, filesDir, mod.Files, kind, fromId, toId, isPfb, withTex);
+        }
+
         if (changed <= 0)
         {
             if (fromId == toId)
@@ -580,6 +704,138 @@ public sealed class ModService
         ModRepository.RefreshFiles(game, mod);
         ModRepository.Save(game, mod);
     }
+
+    /// <summary>组件化 MOD 内单个组件的开关；总开关关闭时只改状态。</summary>
+    public void SetComponentEnabled(GameProfile game, ModRecord mod, int componentId, bool enable)
+    {
+        var component = mod.Components.FirstOrDefault(item => item.Id == componentId)
+            ?? throw new InvalidOperationException("组件不存在");
+        if (component.Enabled == enable)
+        {
+            return;
+        }
+
+        if (!mod.Enabled)
+        {
+            component.Enabled = enable;
+            ModRepository.Save(game, mod);
+            return;
+        }
+
+        var gamePath = RequireGamePath(game);
+        if (_settings.Current.CheckGameRunning && IsGameRunning(game, gamePath))
+        {
+            throw new InvalidOperationException("游戏正在运行，请先关闭游戏");
+        }
+
+        var mods = GetMods(game);
+        var oldEnabled = component.Enabled;
+        try
+        {
+            var affected = component.Files.ToList();
+            component.Enabled = enable;
+            ModRepository.Save(game, mod);
+            if (game.UsesPakPatches)
+            {
+                PakModsManager.AssignForEnable(game, gamePath, mods, GetGroups(game));
+            }
+
+            RedeployScoped(game, gamePath, mods, mod, affected);
+        }
+        catch
+        {
+            component.Enabled = oldEnabled;
+            ModRepository.Save(game, mod);
+            try
+            {
+                RedeployEnabled(game, gamePath, mods);
+            }
+            catch
+            {
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>调整组件顺序；覆盖规则为列表靠后覆盖靠前，调序后立即按新顺序重部署相交文件。</summary>
+    public void MoveComponent(GameProfile game, ModRecord mod, int componentId, int delta)
+    {
+        var index = mod.Components.FindIndex(item => item.Id == componentId);
+        var target = index + delta;
+        if (index < 0 || target < 0 || target >= mod.Components.Count)
+        {
+            return;
+        }
+
+        (mod.Components[index], mod.Components[target]) = (mod.Components[target], mod.Components[index]);
+        ModRepository.Save(game, mod);
+        if (!mod.Enabled)
+        {
+            return;
+        }
+
+        var gamePath = RequireGamePath(game);
+        if (_settings.Current.CheckGameRunning && IsGameRunning(game, gamePath))
+        {
+            throw new InvalidOperationException("游戏正在运行，请先关闭游戏");
+        }
+
+        var mods = GetMods(game);
+        if (game.UsesPakPatches)
+        {
+            PakModsManager.AssignForEnable(game, gamePath, mods, GetGroups(game));
+        }
+
+        RedeployScoped(game, gamePath, mods, mod,
+            mod.Components[index].Files.Concat(mod.Components[target].Files));
+    }
+
+    /// <summary>
+    /// 范围重部署：删除受影响部署路径上的游戏文件，再按有效优先级
+    /// （分组顺序 → 组内顺序 → 组件顺序）重部署文件集与其相交的启用 MOD。
+    /// </summary>
+    private void RedeployScoped(GameProfile game, string gamePath, List<ModRecord> mods, ModRecord changed, IEnumerable<string> affectedStored)
+    {
+        var affected = new HashSet<string>(
+            affectedStored.Select(changed.DeployPath).Select(path => path.Replace('\\', '/')),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var destRelative in affected)
+        {
+            if (!PakModsManager.IsManagedTarget(destRelative) &&
+                !ModLayoutParser.IsSafeDeploymentPath(game, destRelative))
+            {
+                continue;
+            }
+
+            var dest = Path.Combine(gamePath, destRelative.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(dest))
+            {
+                File.Delete(dest);
+            }
+        }
+
+        foreach (var enabled in GroupOrder.Ordered(mods.Where(item => item.Enabled), GetGroups(game)))
+        {
+            var intersects = EnabledStoredFiles(enabled)
+                .Select(enabled.DeployPath)
+                .Select(path => path.Replace('\\', '/'))
+                .Any(affected.Contains);
+            if (intersects)
+            {
+                Deploy(game, gamePath, enabled, enable: true);
+            }
+        }
+
+        CleanupEmpty(game, gamePath);
+    }
+
+    /// <summary>部署视角的存储文件：组件化记录只含启用组件的文件（按组件顺序）。</summary>
+    private static IEnumerable<string> EnabledStoredFiles(ModRecord mod) =>
+        mod.IsBundle
+            ? mod.Components.Where(component => component.Enabled).SelectMany(component => component.Files)
+            : mod.Files;
 
     public void DeleteGroup(GameProfile game, ModGroup group)
     {
@@ -679,7 +935,6 @@ public sealed class ModService
         }
 
         ValidateEnabledMods(game, mods, members[0], enable);
-        var backups = new BackupStore(game);
         foreach (var mod in GroupOrder.Ordered(members, GetGroups(game)))
         {
             if (mod.Enabled == enable)
@@ -689,37 +944,23 @@ public sealed class ModService
 
             if (!enable)
             {
-                Deploy(game, gamePath, mod, enable: false, backups);
+                Deploy(game, gamePath, mod, enable: false);
                 if (game.UsesPakPatches)
                 {
-                    if (PakModsManager.IsEnabled(_settings))
-                    {
-                        PakModsManager.AssignForEnable(game, _settings, gamePath, mods, GetGroups(game));
-                    }
-                    else
-                    {
-                        PakAllocator.Clear(mod);
-                    }
+                    PakModsManager.AssignForEnable(game, gamePath, mods, GetGroups(game));
                 }
             }
 
             mod.Enabled = enable;
             if (enable && game.UsesPakPatches)
             {
-                if (PakModsManager.IsEnabled(_settings))
-                {
-                    PakModsManager.AssignForEnable(game, _settings, gamePath, mods, GetGroups(game));
-                }
-                else if (_settings.Current.FixPakNumber)
-                {
-                    PakAllocator.Assign(game, gamePath, mods, mod, enable);
-                }
+                PakModsManager.AssignForEnable(game, gamePath, mods, GetGroups(game));
             }
 
             ModRepository.Save(game, mod);
         }
 
-        RedeployEnabled(game, gamePath, mods, backups);
+        RedeployEnabled(game, gamePath, mods);
         if (!enable)
         {
             CleanupEmpty(game, gamePath);
@@ -741,21 +982,13 @@ public sealed class ModService
         }
 
         var mods = GetMods(game);
-        var backups = new BackupStore(game);
         foreach (var mod in mods.Where(m => m.Enabled).ToList())
         {
-            Deploy(game, gamePath, mod, enable: false, backups);
+            Deploy(game, gamePath, mod, enable: false);
             mod.Enabled = false;
             if (game.UsesPakPatches)
             {
-                if (PakModsManager.IsEnabled(_settings))
-                {
-                    PakModsManager.AssignForEnable(game, _settings, gamePath, mods, GetGroups(game));
-                }
-                else
-                {
-                    PakAllocator.Clear(mod);
-                }
+                PakModsManager.AssignForEnable(game, gamePath, mods, GetGroups(game));
             }
             ModRepository.Save(game, mod);
         }
@@ -800,6 +1033,14 @@ public sealed class ModService
         return "";
     }
 
+    public string ComponentPreviewPath(GameProfile game, ModRecord mod, int componentId)
+    {
+        var coversDir = Path.Combine(AppPaths.ModDir(game.SteamAppId, mod.Id), "covers");
+        return Directory.Exists(coversDir)
+            ? Directory.GetFiles(coversDir, $"c{componentId}.*").FirstOrDefault() ?? ""
+            : "";
+    }
+
     private static bool IsPreviewExtension(string ext) =>
         ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
         || ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
@@ -820,34 +1061,41 @@ public sealed class ModService
         }
 
         ValidateEnabledMods(game, mods, mods.First(item => item.Enabled), enable: true);
-        if (game.UsesPakPatches && PakModsManager.IsEnabled(_settings))
+        if (game.UsesPakPatches)
         {
-            PakModsManager.Sync(game, _settings, gamePath, mods, GetGroups(game));
+            PakModsManager.Sync(game, gamePath, mods, GetGroups(game));
         }
-        RedeployEnabled(game, gamePath, mods, new BackupStore(game));
+        RedeployEnabled(game, gamePath, mods);
     }
 
-    private void RedeployEnabled(GameProfile game, string gamePath, IEnumerable<ModRecord> mods, BackupStore backups)
+    private void RedeployEnabled(GameProfile game, string gamePath, IEnumerable<ModRecord> mods)
     {
         foreach (var enabledMod in GroupOrder.Ordered(mods.Where(item => item.Enabled), GetGroups(game)))
         {
-            Deploy(game, gamePath, enabledMod, enable: true, backups);
+            Deploy(game, gamePath, enabledMod, enable: true);
         }
     }
 
-    private void Deploy(GameProfile game, string gamePath, ModRecord mod, bool enable, BackupStore backups)
+    private void Deploy(GameProfile game, string gamePath, ModRecord mod, bool enable)
     {
         var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
         if (!enable)
         {
-            Undeploy(game, gamePath, mod, filesDir, backups);
+            Undeploy(game, gamePath, mod, filesDir);
             return;
         }
 
-        foreach (var relative in mod.Files)
+        foreach (var relative in EnabledStoredFiles(mod))
         {
             var destRelative = mod.DeployPath(relative);
             var isPakModsTarget = PakModsManager.IsManagedTarget(destRelative);
+            if (game.UsesPakPatches &&
+                destRelative.EndsWith(".pak", StringComparison.OrdinalIgnoreCase) &&
+                !isPakModsTarget)
+            {
+                throw new InvalidOperationException($"MOD 的 PAK 文件只能部署到 pak_mods 文件夹: {destRelative}");
+            }
+
             if (!ModLayoutParser.IsSafeStoredPath(relative) ||
                 (!isPakModsTarget && !ModLayoutParser.IsSafeDeploymentPath(game, destRelative)))
             {
@@ -866,19 +1114,11 @@ public sealed class ModService
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            if (!isPakModsTarget &&
-                destRelative.EndsWith(".pak", StringComparison.OrdinalIgnoreCase) &&
-                File.Exists(dest) && !BackupStore.FilesEqual(source, dest))
-            {
-                throw new InvalidOperationException($"检测到 PAK 文件冲突，已阻止覆盖游戏文件: {destRelative}");
-            }
-
-            backups.OnDeploy(destRelative, dest, source);
             CopyVerified(source, dest);
         }
     }
 
-    private void Undeploy(GameProfile game, string gamePath, ModRecord mod, string filesDir, BackupStore backups)
+    private void Undeploy(GameProfile game, string gamePath, ModRecord mod, string filesDir)
     {
         var targets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         void AddTarget(string destRelative, string source)
@@ -895,18 +1135,19 @@ public sealed class ModService
         foreach (var relative in mod.Files)
         {
             var source = Path.Combine(filesDir, relative.Replace('/', Path.DirectorySeparatorChar));
-            AddTarget(relative, source);
-            AddTarget(mod.DeployPath(relative), source);
-            if (game.UsesPakPatches && ModLayoutParser.IsPakFile(relative) && File.Exists(source))
+            var destRelative = mod.DeployPath(relative);
+            var isPak = PakAllocator.IsPakStored(mod, relative);
+            if (isPak && game.UsesPakPatches)
             {
-                foreach (var match in PakAllocator.FindMatchingPatches(game, gamePath, source))
+                // 崛起/荒野的 pak 只删除 pak_mods 托管路径，游戏根目录的 pak 不归管理器管。
+                if (PakModsManager.IsManagedTarget(destRelative))
                 {
-                    AddTarget(match, source);
+                    AddTarget(destRelative, source);
                 }
 
-                // pak_mods 模式下的历史遗留文件也要能被找到并清理。
+                // pak_mods 里的历史遗留文件（含映射丢失的情况）按内容哈希找到并清理。
                 var dir = PakModsManager.PakModsDir(gamePath);
-                if (Directory.Exists(dir))
+                if (File.Exists(source) && Directory.Exists(dir))
                 {
                     var hash = PakAllocator.PrefixHash(source);
                     foreach (var file in Directory.GetFiles(dir, "*.pak"))
@@ -918,6 +1159,11 @@ public sealed class ModService
                     }
                 }
             }
+            else
+            {
+                AddTarget(relative, source);
+                AddTarget(destRelative, source);
+            }
         }
 
         foreach (var mapping in mod.OverwriteFiles)
@@ -926,7 +1172,7 @@ public sealed class ModService
             AddTarget(mapping.Value, source);
         }
 
-        foreach (var (destRelative, source) in targets)
+        foreach (var (destRelative, _) in targets)
         {
             if (!PakModsManager.IsManagedTarget(destRelative) &&
                 !ModLayoutParser.IsSafeDeploymentPath(game, destRelative)
@@ -940,15 +1186,6 @@ public sealed class ModService
             {
                 File.Delete(dest);
             }
-
-            var hasOtherOwner = GetMods(game).Any(other => other != mod && other.Enabled &&
-                other.Files.Any(file => string.Equals(other.DeployPath(file), destRelative, StringComparison.OrdinalIgnoreCase)))
-                // pak_mods 里的文件不在别人的 OverwriteFiles 里，但可能是其他 mod 的同名 pak。
-                || (destRelative.StartsWith(PakModsManager.DirName + "/", StringComparison.OrdinalIgnoreCase) &&
-                    GetMods(game).Any(other => other != mod && other.Enabled &&
-                        other.Files.Any(file => ModLayoutParser.IsPakFile(file) &&
-                            string.Equals(Path.GetFileName(other.DeployPath(file)), Path.GetFileName(destRelative), StringComparison.OrdinalIgnoreCase))));
-            backups.OnRemove(dest, destRelative, hasOtherOwner, File.Exists(source) ? source : null);
         }
     }
 
@@ -1033,7 +1270,7 @@ public sealed class ModService
             var filesRoot = Path.GetFullPath(AppPaths.ModFilesDir(game.SteamAppId, mod.Id))
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                 + Path.DirectorySeparatorChar;
-            foreach (var file in mod.Files)
+            foreach (var file in EnabledStoredFiles(mod))
             {
                 var source = Path.GetFullPath(Path.Combine(filesRoot, file.Replace('/', Path.DirectorySeparatorChar)));
                 if (!source.StartsWith(filesRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(source))
@@ -1202,13 +1439,10 @@ public sealed class ModService
             return true;
         }
 
-        if (Directory.GetDirectories(root).Any(dir =>
-                DeployRootNames.Contains(Path.GetFileName(dir), StringComparer.OrdinalIgnoreCase)))
-        {
-            return true;
-        }
-
-        return Directory.GetFiles(root, "*.pak", SearchOption.TopDirectoryOnly).Length > 0;
+        // 根目录的散装 pak 不再强制单包：它本身是一个候选组件，
+        // 单独一个 pak 时 candidates.Count == 1 自然走单 MOD 路径。
+        return Directory.GetDirectories(root).Any(dir =>
+            DeployRootNames.Contains(Path.GetFileName(dir), StringComparer.OrdinalIgnoreCase));
     }
 
     private static List<string> DiscoverImportCandidates(string root)
@@ -1216,9 +1450,13 @@ public sealed class ModService
         var files = Directory.GetFiles(root, "*", SearchOption.TopDirectoryOnly);
         var dirs = Directory.GetDirectories(root);
         var archives = files.Where(ArchiveExtractor.IsArchive).ToList();
+        var paks = files.Where(file =>
+                Path.GetExtension(file).Equals(".pak", StringComparison.OrdinalIgnoreCase))
+            .ToList();
         var candidates = new List<string>();
         candidates.AddRange(dirs);
         candidates.AddRange(archives);
+        candidates.AddRange(paks);
         return candidates
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -1233,7 +1471,10 @@ public sealed class ModService
             throw new InvalidOperationException("未能识别这个 MOD 的文件结构");
         }
 
-        if (!string.IsNullOrWhiteSpace(name))
+        // modinfo/ModuleConfig 提供的名称优先；否则用候选目录/文件名。
+        var sourceStem = Path.GetFileNameWithoutExtension(sourcePath);
+        if (!string.IsNullOrWhiteSpace(name) &&
+            (string.IsNullOrWhiteSpace(parsed.Name) || parsed.Name == sourceStem))
         {
             parsed.Name = name;
         }
@@ -1264,7 +1505,7 @@ public sealed class ModService
         var name = Directory.Exists(path)
             ? Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
             : Path.GetFileNameWithoutExtension(path);
-        var parsed = NexusNames.ParseNexusStem(name);
+        var parsed = NexusNames.ParseNexusDownloadStem(name) ?? NexusNames.ParseNexusStem(name);
         return parsed?.Name ?? name;
     }
 

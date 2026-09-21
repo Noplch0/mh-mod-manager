@@ -21,7 +21,6 @@ public sealed class PakModsTests : IDisposable
         _settings.Load();
         _settings.Current.InstallOption = 0;
         _settings.Current.CheckGameRunning = false;
-        _settings.Current.UsePakModsDir = true;
         _settings.SetGamePath(_game, _root);
         _service = new ModService(_settings);
     }
@@ -129,37 +128,19 @@ public sealed class PakModsTests : IDisposable
     }
 
     [Fact]
-    public void SwitchingModeOffMovesPaksBackToNumberedRootNames()
+    public void GameRootPaksAreNeverTouchedByDeployOrUndeploy()
     {
-        _settings.Current.FixPakNumber = true;
+        var basePak = WriteFile(_root, "re_chunk_000.pak", "game-base");
+        var officialPatch = WriteFile(_root, "re_chunk_000.pak.patch_001.pak", "game-patch");
         var mod = InstallPak("first", "a", "first-mod");
+
         _service.SetEnabled(_game, mod, true);
-        Assert.True(File.Exists(Path.Combine(_root, "pak_mods", "X0000-first-mod.pak")));
+        Assert.Equal("game-base", File.ReadAllText(basePak));
+        Assert.Equal("game-patch", File.ReadAllText(officialPatch));
 
-        _settings.Current.UsePakModsDir = false;
-        _service.SetPakModsMode(_game, false);
-
-        Assert.False(File.Exists(Path.Combine(_root, "pak_mods", "X0000-first-mod.pak")));
-        var mapped = mod.DeployPath("old.pak");
-        Assert.Equal("re_chunk_000.pak.patch_001.pak", mapped);
-        Assert.True(File.Exists(Path.Combine(_root, "re_chunk_000.pak.patch_001.pak")));
-    }
-
-    [Fact]
-    public void SwitchingModeOnMovesRootPaksIntoPakMods()
-    {
-        _settings.Current.UsePakModsDir = false;
-        _settings.Current.FixPakNumber = true;
-        var mod = InstallPak("first", "a", "first-mod");
-        _service.SetEnabled(_game, mod, true);
-        Assert.True(File.Exists(Path.Combine(_root, "re_chunk_000.pak.patch_001.pak")));
-
-        _settings.Current.UsePakModsDir = true;
-        _service.SetPakModsMode(_game, true);
-
-        Assert.False(File.Exists(Path.Combine(_root, "re_chunk_000.pak.patch_001.pak")));
-        Assert.True(File.Exists(Path.Combine(_root, "pak_mods", "X0000-first-mod.pak")));
-        Assert.Equal("a", File.ReadAllText(Path.Combine(_root, "pak_mods", "X0000-first-mod.pak")));
+        _service.SetEnabled(_game, mod, false);
+        Assert.Equal("game-base", File.ReadAllText(basePak));
+        Assert.Equal("game-patch", File.ReadAllText(officialPatch));
     }
 
     [Fact]

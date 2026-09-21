@@ -30,8 +30,6 @@ public static class AppPaths
 
     public static string ModFilesDir(int steamAppId, int id) => Path.Combine(ModDir(steamAppId, id), "files");
 
-    public static string BackupDir(int steamAppId) => Path.Combine(GameDir(steamAppId), "backups");
-
     public static string GroupsFile(int steamAppId) => Path.Combine(GameDir(steamAppId), "groups.json");
 
     public static void EnsureCreated()

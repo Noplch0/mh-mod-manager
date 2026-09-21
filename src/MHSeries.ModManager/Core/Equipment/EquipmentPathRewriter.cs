@@ -24,6 +24,21 @@ internal static class EquipmentPathRewriter
 
         var lower = path.Replace('\\', '/').ToLowerInvariant();
         var normalized = EquipmentResolver.Normalize(lower);
+
+        if (IsBonePath(game, lower))
+        {
+            // 骨骼 lua 没有可解析的目录结构（原版 IsBonePath 类别），跳过解析验证，
+            // 直接按当前装备的令牌做片段替换；原版 rename 的 bonesystem 键就是部件令牌。
+            var boneNext = Rewrite(game, kind, fromId, toId, lower);
+            if (string.Equals(boneNext, lower, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            rewritten = RestoreSeparators(path, boneNext);
+            return true;
+        }
+
         string next;
         if (game == GameId.World && EquipKindInfo.IsArmor(kind)
             && EquipmentResolver.TryReadWorldArmorIds(normalized, out var armorKind, out var folderId, out var fileId, out var hasFileId)
@@ -67,6 +82,19 @@ internal static class EquipmentPathRewriter
 
         rewritten = RestoreSeparators(path, next);
         return true;
+    }
+
+    private static bool IsBonePath(GameId game, string path)
+    {
+        // 原版各游戏 ModelTarget.IsBonePath：荒野 1 个前缀，崛起 3 个（大小写不敏感，路径已小写化）。
+        if (path.StartsWith("reframework/data/bonesystem/", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return game == GameId.Rise
+               && (path.StartsWith("reframework/data/lua bone system/custom/", StringComparison.Ordinal)
+                   || path.StartsWith("reframework/data/luabonesystem/custom/", StringComparison.Ordinal));
     }
 
     private static string Rewrite(GameId game, EquipKind kind, int fromId, int toId, string path)
@@ -181,11 +209,19 @@ internal static class EquipmentPathRewriter
         if (EquipKindInfo.IsArmor(kind))
         {
             var tag = kind == EquipKind.FemaleArmor ? "ch03" : "ch02";
+            var otherTag = kind == EquipKind.FemaleArmor ? "ch02" : "ch03";
             var gender = kind == EquipKind.FemaleArmor ? "female" : "male";
             yield return $"/{tag}/{first}/{second}";
             yield return $"{tag}_{first}_{second}";
             yield return $"/{gender}/{first}/{second}";
+            // 原版部件键同时包含两种性别 tag（男款 MOD 可能带 ch03 命名的部件文件）。
+            yield return $"{otherTag}_{first}_{second}";
             yield return $"{first}_{second}";
+            // 层叠防具纹理：原版纹理键含 second±1 的配对 ID，按“偶数成员→偶数成员、奇数→奇数”映射。
+            var secondValue = int.Parse(second);
+            var evenSecond = secondValue - secondValue % 2;
+            yield return $"textures/{tag}_{first}_{evenSecond:000}";
+            yield return $"textures/{tag}_{first}_{evenSecond + 1:000}";
             yield break;
         }
 

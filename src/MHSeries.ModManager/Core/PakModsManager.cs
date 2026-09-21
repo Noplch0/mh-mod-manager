@@ -4,15 +4,13 @@ using MhModManager.Models;
 namespace MhModManager.Core;
 
 /// <summary>
-/// pak_mods 文件夹模式：启用后 pak 部署到游戏根目录 pak_mods，
+/// pak_mods 部署：pak 统一部署到游戏根目录 pak_mods，
 /// 文件名 X{index:0004}-{MOD名}.pak，序号跟随管理器列表顺序（分组顺序 + 组内顺序）。
 /// </summary>
 public static class PakModsManager
 {
     public const string DirName = "pak_mods";
     private const string Prefix = "X";
-
-    public static bool IsEnabled(SettingsStore settings) => settings.Current.UsePakModsDir;
 
     public static string PakModsDir(string gamePath) => Path.Combine(gamePath, DirName);
 
@@ -38,9 +36,9 @@ public static class PakModsManager
     }
 
     /// <summary>让磁盘文件与映射跟当前启用列表、名称保持一致。幂等。</summary>
-    public static void Sync(GameProfile game, SettingsStore settings, string gamePath, List<ModRecord> mods, IReadOnlyList<ModGroup> groups)
+    public static void Sync(GameProfile game, string gamePath, List<ModRecord> mods, IReadOnlyList<ModGroup> groups)
     {
-        if (!game.UsesPakPatches || !IsEnabled(settings) || !Directory.Exists(gamePath))
+        if (!game.UsesPakPatches || !Directory.Exists(gamePath))
         {
             return;
         }
@@ -62,6 +60,7 @@ public static class PakModsManager
         }
 
         // 1) 重新映射：磁盘旧文件改名到新目标，映射写入 OverwriteFiles。
+        //    旧版部署在游戏根目录的编号 pak 也有映射记录，会一并移入 pak_mods。
         var changedMods = new HashSet<ModRecord>();
         foreach (var group in desired.GroupBy(item => item.Mod))
         {
@@ -118,55 +117,15 @@ public static class PakModsManager
         }
     }
 
-    /// <summary>切换 pak_mods 模式：按旧映射卸载全部启用 MOD → 重建映射 → 整体重部署。失败时抛出。</summary>
-    public static void SetPakModsMode(GameProfile game, SettingsStore settings, string gamePath, bool enabled, List<ModRecord> mods, IReadOnlyList<ModGroup> groups, Action deployAll)
-    {
-        if (!game.UsesPakPatches || !mods.Any(mod => mod.Enabled))
-        {
-            return;
-        }
-
-        var backups = new BackupStore(game);
-        foreach (var mod in GroupOrder.Ordered(mods.Where(mod => mod.Enabled), groups))
-        {
-            UndeployMod(game, gamePath, mod, backups);
-            PakAllocator.Clear(mod);
-            ModRepository.Save(game, mod);
-        }
-
-        settings.Current.UsePakModsDir = enabled;
-        try
-        {
-            if (!enabled)
-            {
-                var ordered = GroupOrder.Ordered(mods.Where(mod => mod.Enabled), groups);
-                foreach (var mod in ordered)
-                {
-                    PakAllocator.Assign(game, gamePath, mods, mod, enabling: true);
-                    ModRepository.Save(game, mod);
-                }
-            }
-
-            Sync(game, settings, gamePath, mods, groups);
-            deployAll();
-            CleanupOrphanDir(gamePath);
-        }
-        catch
-        {
-            settings.Current.UsePakModsDir = !enabled;
-            throw;
-        }
-    }
-
     /// <summary>启用 MOD 后按列表顺序重排全部 X 编号。</summary>
-    public static void AssignForEnable(GameProfile game, SettingsStore settings, string gamePath, List<ModRecord> mods, IReadOnlyList<ModGroup> groups)
+    public static void AssignForEnable(GameProfile game, string gamePath, List<ModRecord> mods, IReadOnlyList<ModGroup> groups)
     {
-        if (!game.UsesPakPatches || !IsEnabled(settings))
+        if (!game.UsesPakPatches)
         {
             return;
         }
 
-        Sync(game, settings, gamePath, mods, groups);
+        Sync(game, gamePath, mods, groups);
     }
 
     internal static string SafeName(ModRecord mod)
@@ -184,7 +143,7 @@ public static class PakModsManager
         var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mod in mods)
         {
-            foreach (var file in PakAllocator.GetPakFiles(mod, useOverwrite: false))
+            foreach (var file in PakAllocator.GetPakFilesAll(mod))
             {
                 var source = Path.Combine(AppPaths.ModFilesDir(game.SteamAppId, mod.Id), file.Replace('/', Path.DirectorySeparatorChar));
                 if (File.Exists(source))
@@ -195,44 +154,6 @@ public static class PakModsManager
         }
 
         return hashes;
-    }
-
-    private static void UndeployMod(GameProfile game, string gamePath, ModRecord mod, BackupStore backups)
-    {
-        var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
-        var targets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var relative in mod.Files)
-        {
-            var source = Path.Combine(filesDir, relative.Replace('/', Path.DirectorySeparatorChar));
-            targets.TryAdd(Normalize(mod.DeployPath(relative)), source);
-            if (ModLayoutParser.IsPakFile(relative) && File.Exists(source))
-            {
-                foreach (var match in PakAllocator.FindMatchingPatches(game, gamePath, source))
-                {
-                    targets.TryAdd(Normalize(match), source);
-                }
-            }
-        }
-
-        foreach (var (destRelative, source) in targets)
-        {
-            var dest = Path.Combine(gamePath, destRelative.Replace('/', Path.DirectorySeparatorChar));
-            if (File.Exists(dest))
-            {
-                File.Delete(dest);
-            }
-
-            backups.OnRemove(dest, destRelative, keepBackup: false, File.Exists(source) ? source : null);
-        }
-    }
-
-    private static void CleanupOrphanDir(string gamePath)
-    {
-        var dir = PakModsDir(gamePath);
-        if (Directory.Exists(dir) && Directory.GetFileSystemEntries(dir).Length == 0)
-        {
-            Directory.Delete(dir);
-        }
     }
 
     private static string HashPrefix(string path)

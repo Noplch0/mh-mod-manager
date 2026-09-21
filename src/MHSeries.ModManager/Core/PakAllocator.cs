@@ -4,115 +4,30 @@ namespace MhModManager.Core;
 
 public static class PakAllocator
 {
-    public static void Assign(GameProfile game, string gamePath, IEnumerable<ModRecord> mods, ModRecord target, bool enabling)
-    {
-        if (!game.UsesPakPatches)
-        {
-            return;
-        }
+    /// <summary>存储路径是否为 pak（组件化记录按剥前缀后的部署路径判断）。</summary>
+    public static bool IsPakStored(ModRecord mod, string stored) =>
+        ModLayoutParser.IsPakFile(mod.ContentRelative(stored));
 
-        var targetNames = GetPakFiles(target, useOverwrite: true)
-            .Select(file => Path.GetFileName(target.DeployPath(file)))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var used = new HashSet<int>(ExistingPatchNumbers(game, gamePath, targetNames));
+    /// <summary>记录内全部 pak 的存储路径（不含启用状态过滤）。</summary>
+    public static IEnumerable<string> GetPakFilesAll(ModRecord mod) =>
+        mod.Files.Where(file => IsPakStored(mod, file));
 
-        foreach (var mod in mods)
-        {
-            if (mod == target || !mod.Enabled)
-            {
-                continue;
-            }
-
-            foreach (var file in GetPakFiles(mod, useOverwrite: true))
-            {
-                var number = ModLayoutParser.ParsePakNumber(mod.DeployPath(file));
-                if (number > 0)
-                {
-                    used.Add(number);
-                }
-            }
-        }
-
-        var next = used.Count > 0 ? used.Max() + 1 : 1;
-        foreach (var file in GetPakFiles(target, useOverwrite: false))
-        {
-            if (!enabling)
-            {
-                target.OverwriteFiles.Remove(Normalize(file));
-                continue;
-            }
-
-            while (used.Contains(next))
-            {
-                next++;
-            }
-
-            if (next > 999)
-            {
-                throw new InvalidOperationException("PAK 补丁编号已用尽（最大 999）");
-            }
-
-            var mapped = ModLayoutParser.FormatPakName(game.PakPrefix, next);
-            target.OverwriteFiles[Normalize(file)] = mapped;
-            used.Add(next);
-            next++;
-        }
-    }
-
-    public static void Repair(GameProfile game, string gamePath, IEnumerable<ModRecord> mods)
-    {
-        if (!game.UsesPakPatches || !Directory.Exists(gamePath))
-        {
-            return;
-        }
-
-        var existing = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var file in Directory.GetFiles(gamePath, "*.pak"))
-        {
-            if (!IsPatchPak(game, Path.GetFileName(file)))
-            {
-                continue;
-            }
-
-            var number = ModLayoutParser.ParsePakNumber(file);
-            if (number >= 1)
-            {
-                existing[Md5Prefix(file)] = number;
-            }
-        }
-
-        foreach (var mod in mods.Where(m => m.Enabled))
-        {
-            var changed = false;
-            foreach (var file in GetPakFiles(mod, useOverwrite: false))
-            {
-                var source = Path.Combine(AppPaths.ModFilesDir(game.SteamAppId, mod.Id), file.Replace('/', Path.DirectorySeparatorChar));
-                if (!File.Exists(source))
-                {
-                    continue;
-                }
-
-                var hash = Md5Prefix(source);
-                if (existing.TryGetValue(hash, out var number))
-                {
-                    var mapped = ModLayoutParser.FormatPakName(game.PakPrefix, number);
-                    if (!string.Equals(mod.DeployPath(file), mapped, StringComparison.OrdinalIgnoreCase))
-                    {
-                        mod.OverwriteFiles[Normalize(file)] = mapped;
-                        changed = true;
-                    }
-                }
-            }
-
-            if (changed)
-            {
-                ModRepository.Save(game, mod);
-            }
-        }
-    }
-
+    /// <summary>部署视角的 pak：组件化记录只含启用组件的 pak（按组件顺序）。</summary>
     public static IEnumerable<string> GetPakFiles(ModRecord mod, bool useOverwrite)
     {
+        if (mod.IsBundle)
+        {
+            foreach (var file in mod.Components
+                         .Where(component => component.Enabled)
+                         .SelectMany(component => component.Files)
+                         .Where(file => IsPakStored(mod, file)))
+            {
+                yield return file;
+            }
+
+            yield break;
+        }
+
         foreach (var file in mod.Files)
         {
             var dest = useOverwrite ? mod.DeployPath(file) : file;
@@ -122,63 +37,6 @@ public static class PakAllocator
             }
         }
     }
-
-    public static void Clear(ModRecord mod) => mod.OverwriteFiles.Clear();
-
-    public static IEnumerable<string> FindMatchingPatches(GameProfile game, string gamePath, string sourcePak)
-    {
-        if (!game.UsesPakPatches || !Directory.Exists(gamePath) || !File.Exists(sourcePak))
-        {
-            yield break;
-        }
-
-        var hash = Md5Prefix(sourcePak);
-        foreach (var file in Directory.GetFiles(gamePath, "*.pak"))
-        {
-            var name = Path.GetFileName(file);
-            if (!IsPatchPak(game, name))
-            {
-                continue;
-            }
-
-            if (Md5Prefix(file) == hash)
-            {
-                yield return name;
-            }
-        }
-    }
-
-    private static IEnumerable<int> ExistingPatchNumbers(GameProfile game, string gamePath, HashSet<string> ignoreNames)
-    {
-        if (!Directory.Exists(gamePath))
-        {
-            yield break;
-        }
-
-        foreach (var file in Directory.GetFiles(gamePath, "*.pak"))
-        {
-            var name = Path.GetFileName(file);
-            if (ignoreNames.Contains(name) || !IsPatchPak(game, name))
-            {
-                continue;
-            }
-
-            var number = ModLayoutParser.ParsePakNumber(name);
-            if (number > 0)
-            {
-                yield return number;
-            }
-        }
-    }
-
-    private static bool IsPatchPak(GameProfile game, string fileName) =>
-        fileName.Contains(".patch_", StringComparison.OrdinalIgnoreCase)
-        || (!string.IsNullOrEmpty(game.PakPrefix)
-            && fileName.StartsWith(game.PakPrefix, StringComparison.OrdinalIgnoreCase));
-
-    private static string Normalize(string path) => path.Replace('\\', '/');
-
-    private static string Md5Prefix(string path) => PrefixHash(path);
 
     internal static string PrefixHash(string path)
     {

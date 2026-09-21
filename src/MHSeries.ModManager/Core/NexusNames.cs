@@ -1,9 +1,14 @@
+using System.Text.RegularExpressions;
 using MhModManager.Models;
 
 namespace MhModManager.Core;
 
 public static class NexusNames
 {
+    // Nexus 站内下载的压缩包名：名称 id 版本 日期 密钥，如
+    // "Dreamspell Magic Staff 4874 4 2026-09-16T11-43Z 8nis61VXS.zip"。
+    private static readonly Regex DownloadDate = new(@"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}Z$", RegexOptions.Compiled);
+
     public static void Apply(ParsedMod mod, string filePath)
     {
         var stem = Path.GetFileNameWithoutExtension(filePath);
@@ -25,7 +30,8 @@ public static class NexusNames
             }
         }
 
-        var info = ParseNexusStem(stem);
+        // 下载格式必须先于连字符格式判断，否则日期里的数字段会被旧解析器误当 id。
+        var info = ParseNexusDownloadStem(stem) ?? ParseNexusStem(stem);
         if (info is null)
         {
             return;
@@ -36,7 +42,8 @@ public static class NexusNames
             mod.NexusId = info.Value.ModId;
         }
 
-        if (string.IsNullOrWhiteSpace(mod.Name))
+        // Name 等于原始文件名时说明 modinfo 没有提供名称（非 ModuleConfig 路径会用文件名预填）。
+        if (string.IsNullOrWhiteSpace(mod.Name) || mod.Name == stem)
         {
             mod.Name = info.Value.Name;
         }
@@ -45,6 +52,24 @@ public static class NexusNames
         {
             mod.Version = info.Value.Version;
         }
+    }
+
+    /// <summary>解析 Nexus 站内下载文件名（空格分隔：名称 id 版本 日期 密钥），不符合返回 null。</summary>
+    public static (string Name, int ModId, string Version)? ParseNexusDownloadStem(string stem)
+    {
+        var tokens = stem.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 5 || !int.TryParse(tokens[^4], out var modId) || modId <= 0)
+        {
+            return null;
+        }
+
+        if (!DownloadDate.IsMatch(tokens[^2]) || !tokens[^1].All(char.IsLetterOrDigit))
+        {
+            return null;
+        }
+
+        var name = string.Join(' ', tokens[..^4]);
+        return string.IsNullOrWhiteSpace(name) ? null : (name, modId, tokens[^3]);
     }
 
     public static (string Name, int ModId, string Version)? ParseNexusStem(string stem)

@@ -190,7 +190,7 @@ button:disabled { opacity: .45; cursor: default; }
 .mods { display: flex; flex-direction: column; gap: 8px; }
 .mod {
   display: grid;
-  grid-template-columns: 22px 64px minmax(0, 1fr) auto;
+  grid-template-columns: 22px 66px 64px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   background: var(--row);
@@ -305,3 +305,34 @@ button:disabled { opacity: .45; cursor: default; }
 .dropcard {
   border: 1px dashed var(--accent); color: var(--accent); padding: 28px 40px; border-radius: 12px; background: var(--panel);
 }
+
+/* 组件化 MOD：缩略图前的展开按钮 + mod 行下方内嵌展开的组件列表 */
+.comp-slot { width: 66px; }
+.comp-toggle {
+  width: 66px; height: 28px; padding: 0 2px;
+  border: 1px solid var(--line-strong); border-radius: 7px;
+  background: var(--input); color: var(--accent);
+  font-size: 11px; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+}
+.comp-toggle:hover { background: var(--accent-soft); border-color: var(--accent); }
+.comp-panel {
+  display: flex; flex-direction: column; gap: 6px;
+  margin: -2px 0 0 34px;
+  background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(28, 43, 58, .10);
+  padding: 8px;
+}
+.comp-row {
+  display: grid; grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 10px; align-items: center;
+  background: var(--row); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 8px;
+}
+.comp-cover {
+  border-radius: 6px; background: var(--accent-soft); overflow: hidden;
+  display: grid; place-items: center; color: var(--muted); font-size: 11px;
+}
+.comp-cover img { width: 100%; height: 100%; object-fit: cover; }
+.comp-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.comp-tools { display: flex; align-items: center; gap: 4px; }

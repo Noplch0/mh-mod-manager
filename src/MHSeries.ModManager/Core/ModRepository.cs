@@ -125,6 +125,12 @@ public static class ModRepository
 
             mod.Files.Add(Path.GetRelativePath(filesDir, file).Replace('\\', '/'));
         }
+
+        // 组件化记录：组件文件列表对账到磁盘实际存在的内容。
+        foreach (var component in mod.Components)
+        {
+            component.Files.RemoveAll(file => !mod.Files.Contains(file, StringComparer.OrdinalIgnoreCase));
+        }
     }
 
     public static void MakeId(IReadOnlyList<ModRecord> mods, IReadOnlyList<ModGroup> groups, ModRecord mod)

@@ -25,9 +25,10 @@ public sealed class ModServiceTests : IDisposable
     }
 
     [Fact]
-    public void OverlappingModsRestoreTheOriginalGameFile()
+    public void OverlappingModsRedeployInPriorityOrderAndLeaveNoResidue()
     {
         var destination = WriteFile(_root, "nativePC/shared.bin", "original");
+        var backupsDir = Path.Combine(AppPaths.GameDir(_appId), "backups");
         var first = _service.Install(_game, CreateParsed("first", "first-mod"));
         var second = _service.Install(_game, CreateParsed("second", "second-mod"));
 
@@ -39,7 +40,9 @@ public sealed class ModServiceTests : IDisposable
         Assert.Equal("first-mod", File.ReadAllText(destination));
         _service.SetEnabled(_game, first, false);
 
-        Assert.Equal("original", File.ReadAllText(destination));
+        // 不再有备份还原：全部禁用后游戏目录不残留 MOD 文件，也不生成备份目录。
+        Assert.False(File.Exists(destination));
+        Assert.False(Directory.Exists(backupsDir));
     }
 
     [Fact]
@@ -200,7 +203,7 @@ public sealed class ModServiceTests : IDisposable
     }
 
     [Fact]
-    public void DisablingRestoresReplacedVanillaFiles()
+    public void DisablingLeavesNoResidue()
     {
         var destination = WriteFile(_root, "nativePC/shared.bin", "original");
         var mod = _service.Install(_game, CreateParsed("overlay", "modded"));
@@ -209,11 +212,11 @@ public sealed class ModServiceTests : IDisposable
         Assert.Equal("modded", File.ReadAllText(destination));
         _service.SetEnabled(_game, mod, false);
 
-        Assert.Equal("original", File.ReadAllText(destination));
+        Assert.False(File.Exists(destination));
     }
 
     [Fact]
-    public void DisablingPakModRemovesMappedPatchEvenIfOverwriteIsLost()
+    public void DisablingPakModRemovesPakModsFilesEvenIfMappingIsLost()
     {
         var pakAppId = _appId + 17;
         var wilds = new GameProfile(GameId.Wilds, "wilds", "w", "w", "wilds.exe", pakAppId, "w",
@@ -236,12 +239,14 @@ public sealed class ModServiceTests : IDisposable
             var mod = service.Install(wilds, parsed);
             service.SetEnabled(wilds, mod, true);
             var mapped = Assert.Single(mod.OverwriteFiles).Value;
-            var deployed = Path.Combine(_root, mapped);
+            Assert.True(PakModsManager.IsManagedTarget(mapped));
+            var deployed = Path.Combine(_root, mapped.Replace('/', Path.DirectorySeparatorChar));
             Assert.True(File.Exists(deployed));
 
             mod.OverwriteFiles.Clear();
             service.SetEnabled(wilds, mod, false);
 
+            // 映射丢失时靠 pak_mods 目录内的同哈希扫描兜底清理，游戏根目录不受影响。
             Assert.False(File.Exists(deployed));
         }
         finally
@@ -266,7 +271,7 @@ public sealed class ModServiceTests : IDisposable
     }
 
     [Fact]
-    public void BundleWithIndependentFoldersCreatesAGroup()
+    public void BundleWithIndependentFoldersBecomesOneComponentMod()
     {
         var bundle = Path.Combine(_root, "Item Duration Mod - All-in-One.rar");
         Directory.CreateDirectory(bundle);
@@ -276,13 +281,32 @@ public sealed class ModServiceTests : IDisposable
 
         var result = _service.Import(_game, bundle);
 
-        Assert.NotNull(result.Group);
-        Assert.Equal("Item Duration Mod - All-in-One.rar", result.Group!.Name);
-        Assert.Equal(3, result.Mods.Count);
-        Assert.All(result.Mods, mod => Assert.Equal(result.Group.Id, mod.GroupId));
-        Assert.Contains(result.Mods, mod => mod.DisplayName == "Duration 30");
-        Assert.Contains(result.Mods, mod => mod.DisplayName == "Duration 60");
-        Assert.Contains(result.Mods, mod => mod.DisplayName == "Duration 90");
+        Assert.Null(result.Group);
+        var mod = Assert.Single(result.Mods);
+        Assert.Equal(3, mod.Components.Count);
+        Assert.All(mod.Components, component => Assert.False(component.Enabled));
+        Assert.Equal(["Duration 30", "Duration 60", "Duration 90"], mod.Components.Select(item => item.Name));
+        Assert.Equal(3, mod.Files.Count);
+        Assert.Equal(_service.GetGroups(_game).First(group => group.IsDefault).Id, mod.GroupId);
+        Assert.False(mod.Enabled);
+        // 组件文件按 c{n}/ 前缀分目录存储
+        Assert.Contains("c1/nativePC/one.bin", mod.Components[0].Files);
+    }
+
+    [Fact]
+    public void NameAsBundleOverridesDisplayName()
+    {
+        var bundle = Path.Combine(_root, "some-pack");
+        Directory.CreateDirectory(bundle);
+        WriteFile(bundle, "Alpha/modinfo.ini", "name=Alpha Skin\nNameAsBundle=Dreamspell Pack (Bow)\n");
+        WriteFile(bundle, "Alpha/nativePC/a.bin", "a");
+        WriteFile(bundle, "Beta/nativePC/b.bin", "b");
+
+        var result = _service.Import(_game, bundle);
+        var mod = Assert.Single(result.Mods);
+
+        Assert.Equal("Dreamspell Pack (Bow)", mod.DisplayName);
+        Assert.Equal("Alpha Skin", mod.Components[0].Name);
     }
 
     [Fact]
@@ -297,6 +321,21 @@ public sealed class ModServiceTests : IDisposable
         Assert.Null(result.Group);
         Assert.Single(result.Mods);
         Assert.Equal(_service.GetGroups(_game).First(group => group.IsDefault).Id, result.Mods[0].GroupId);
+    }
+
+    [Fact]
+    public void NexusDownloadFilenameSetsNameIdAndHomeUrl()
+    {
+        var bundle = Path.Combine(_root, "Dreamspell Magic Staff 4874 4 2026-09-16T11-43Z 8nis61VXS");
+        Directory.CreateDirectory(bundle);
+        WriteFile(bundle, "nativePC/shared.bin", "one");
+
+        var result = _service.Import(_game, bundle);
+        var mod = Assert.Single(result.Mods);
+
+        Assert.Equal("Dreamspell Magic Staff", mod.DisplayName);
+        Assert.Equal(4874, mod.NexusId);
+        Assert.Equal($"https://www.nexusmods.com/{_game.NexusSlug}/mods/4874", mod.HomeUrl);
     }
 
     [Fact]
@@ -321,7 +360,23 @@ public sealed class ModServiceTests : IDisposable
     }
 
     [Fact]
-    public void UpdateBundleRemovesOriginalAndCreatesGroup()
+    public void UpdateWithNexusArchiveTakesNewModId()
+    {
+        var original = _service.Install(_game, CreateParsed("old", "old-data"));
+        var replacement = Path.Combine(_root, "Dreamspell Magic Staff 4874 4 2026-09-16T11-43Z 8nis61VXS");
+        Directory.CreateDirectory(replacement);
+        WriteFile(replacement, "nativePC/shared.bin", "new-data");
+
+        var result = _service.Update(_game, original, replacement);
+
+        Assert.Null(result.Group);
+        Assert.Equal(original.Id, result.Mods[0].Id);
+        Assert.Equal(4874, result.Mods[0].NexusId);
+        Assert.Equal($"https://www.nexusmods.com/{_game.NexusSlug}/mods/4874", result.Mods[0].HomeUrl);
+    }
+
+    [Fact]
+    public void UpdateBundleConvertsModInPlace()
     {
         var original = _service.Install(_game, CreateParsed("old", "old-data"));
         var bundle = Path.Combine(_root, "Combo Pack");
@@ -331,13 +386,15 @@ public sealed class ModServiceTests : IDisposable
 
         var result = _service.Update(_game, original, bundle);
 
-        Assert.NotNull(result.Group);
-        Assert.Equal("Combo Pack", result.Group!.Name);
-        Assert.Equal(2, result.Mods.Count);
-        Assert.DoesNotContain(_service.GetMods(_game), item => item.DisplayName == "old");
-        Assert.Contains(result.Mods, mod => mod.DisplayName == "Alpha");
-        Assert.Contains(result.Mods, mod => mod.DisplayName == "Beta");
-        Assert.All(result.Mods, mod => Assert.Equal(result.Group.Id, mod.GroupId));
+        Assert.Null(result.Group);
+        var mod = Assert.Single(_service.GetMods(_game));
+        Assert.Equal(original.Id, mod.Id);
+        Assert.True(mod.IsBundle);
+        Assert.Equal(["Alpha", "Beta"], mod.Components.Select(item => item.Name));
+        Assert.All(mod.Components, component => Assert.False(component.Enabled));
+        var filesDir = AppPaths.ModFilesDir(_appId, original.Id);
+        Assert.Equal("a", File.ReadAllText(Path.Combine(filesDir, "c1", "nativePC", "a.bin")));
+        Assert.Equal("b", File.ReadAllText(Path.Combine(filesDir, "c2", "nativePC", "b.bin")));
     }
 
     [Fact]

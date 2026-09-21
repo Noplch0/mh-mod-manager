@@ -119,10 +119,10 @@ if (-not $?) { Pop-Location; throw "ui build failed" }
 Pop-Location
 
 Write-Host "4/4 assemble app and zip"
-New-Item -ItemType Directory -Force -Path $distRoot | Out-Null
-if (Test-Path -LiteralPath $outDir) {
-    Remove-Item -LiteralPath $outDir -Recurse -Force
+if (Test-Path -LiteralPath $distRoot) {
+    Remove-Item -Path (Join-Path $distRoot "*") -Recurse -Force
 }
+New-Item -ItemType Directory -Force -Path $distRoot | Out-Null
 Copy-Item -LiteralPath $electronDist -Destination $outDir -Recurse
 
 $defaultApp = Join-Path $outDir "resources\default_app.asar"
@@ -168,10 +168,19 @@ if (-not (Test-Path -LiteralPath $appExe)) {
     throw "mh-mod-manager.exe not found"
 }
 
-if (Test-Path -LiteralPath $zipPath) {
-    Remove-Item -LiteralPath $zipPath -Force
+$sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
+if (-not $sevenZip) {
+    throw "7z not found. Install 7-Zip and add it to PATH."
 }
-Compress-Archive -Path $outDir -DestinationPath $zipPath -CompressionLevel Optimal
+
+$zipName = Split-Path $zipPath -Leaf
+Push-Location $distRoot
+& 7z a -tzip $zipName ".\mh-mod-manager"
+$zipExit = $LASTEXITCODE
+Pop-Location
+if ($zipExit -ne 0) {
+    throw "7z failed with exit code $zipExit"
+}
 if (-not (Test-Path -LiteralPath $zipPath)) {
     throw "ZIP archive was not created"
 }

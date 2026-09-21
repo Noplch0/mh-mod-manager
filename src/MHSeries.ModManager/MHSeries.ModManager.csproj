@@ -14,6 +14,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Data\Equipment\*.csv" />
     <EmbeddedResource Include="Data\Equipment\*.txt.gz" />
+    <EmbeddedResource Include="Data\Equipment\*avp*.bin" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="MHSeries.ModManager.Tests" />

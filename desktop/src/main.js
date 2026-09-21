@@ -1,7 +1,7 @@
 const state = {
   api: "http://127.0.0.1:17865",
   games: [],
-  settings: { lastGame: "Wilds", checkGameRunning: true, fixPakNumber: true, usePakModsDir: false, installOption: 0 },
+  settings: { lastGame: "Wilds", checkGameRunning: true, installOption: 0 },
   game: null,
   groups: [],
   mods: [],
@@ -14,6 +14,7 @@ const state = {
   moveTarget: 0,
   renameDrafts: {},
   modRenameDrafts: {},
+  bundleOpenId: null,
   equipPicker: null,
   equipCatalog: { kind: "", items: [], loading: false }
 };
@@ -67,6 +68,9 @@ function applyWorkspace(data, status) {
   }
   const ids = new Set(state.mods.map(mod => mod.id));
   state.selectedIds = new Set([...state.selectedIds].filter(id => ids.has(id)));
+  if (state.bundleOpenId != null && !ids.has(state.bundleOpenId)) {
+    state.bundleOpenId = null;
+  }
   if (state.activeId && !ids.has(state.activeId)) {
     state.activeId = null;
     if (state.pane === "mod") state.pane = "info";
@@ -203,6 +207,25 @@ function switchClass(on) {
   return `switch${on ? " on" : ""}`;
 }
 
+function componentCounts(mod) {
+  const comps = mod.components ?? [];
+  return { total: comps.length, enabled: comps.filter(item => item.enabled).length };
+}
+
+function renderComponentRows(mod, coverSize) {
+  const comps = mod.components ?? [];
+  return comps.map((comp, index) => `
+    <div class="comp-row">
+      <span class="comp-cover" style="width:${coverSize}px;height:${coverSize}px">${comp.hasPreview ? `<img src="${esc(apiUrl(comp.previewUrl))}" alt="" />` : '<span class="muted">◇</span>'}</span>
+      <span class="comp-name" title="${esc(comp.name)}">${esc(comp.name)}</span>
+      <span class="comp-tools">
+        ${index === 0 ? "" : `<button class="icon" data-action="comp-up" data-mod="${mod.id}" data-comp="${comp.id}" title="上移（靠后覆盖靠前）">↑</button>`}
+        ${index === comps.length - 1 ? "" : `<button class="icon" data-action="comp-down" data-mod="${mod.id}" data-comp="${comp.id}" title="下移（靠后覆盖靠前）">↓</button>`}
+        <button class="${switchClass(comp.enabled)}" data-action="comp-enable" data-mod="${mod.id}" data-comp="${comp.id}" data-on="${comp.enabled}"></button>
+      </span>
+    </div>`).join("");
+}
+
 function esc(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -278,7 +301,7 @@ function render() {
               ${state.groups.map(group => `<option value="${group.id}" ${group.id === state.moveTarget ? "selected" : ""}>${esc(group.name)}</option>`).join("")}
             </select>
             <button class="primary" data-action="move-selected" ${state.busy || selected.length === 0 ? "disabled" : ""}>批量移动</button>
-            <button class="primary" data-action="import" ${state.busy ? "disabled" : ""}>导入</button>
+            <button class="primary" data-action="import" ${state.busy ? "disabled" : ""}>添加mod</button>
           </div>
           <div class="list">
             ${visibleGroups().map(group => {
@@ -303,6 +326,11 @@ function render() {
                   ${show ? `<div class="mods">${mods.map(mod => `
                     <article class="mod${state.selectedIds.has(mod.id) ? " selected" : ""}${state.activeId === mod.id ? " active" : ""}" data-action="open-mod" data-id="${mod.id}">
                       <input type="checkbox" data-role="select-mod" data-id="${mod.id}" ${state.selectedIds.has(mod.id) ? "checked" : ""} />
+                      ${mod.isBundle ? (() => {
+                        const counts = componentCounts(mod);
+                        const open = state.bundleOpenId === mod.id;
+                        return `<button class="comp-toggle" data-action="toggle-components" data-id="${mod.id}" title="展开组件列表">${open ? "▴" : "▾"} 组件 ${counts.enabled}/${counts.total}</button>`;
+                      })() : '<span class="comp-slot"></span>'}
                       <div class="thumb">${mod.hasPreview ? `<img src="${esc(previewSrc(mod))}" alt="" />` : esc(mod.category)}</div>
                       <div class="meta">
                         <input class="name" data-role="mod-name" data-id="${mod.id}" value="${esc(state.modRenameDrafts[mod.id] ?? mod.name)}" />
@@ -319,7 +347,8 @@ function render() {
                         <button class="icon" data-action="mod-down" data-id="${mod.id}">↓</button>
                         <button class="${switchClass(mod.enabled)}" data-action="mod-enable" data-id="${mod.id}" data-on="${mod.enabled}"></button>
                       </div>
-                    </article>`).join("") || '<div class="empty">这个分组还没有 MOD</div>'}</div>` : ""}
+                    </article>
+                    ${state.bundleOpenId === mod.id ? `<div class="comp-panel">${renderComponentRows(mod, 32)}<div class="muted" style="font-size:12px">仅总开关开启时组件部分才会启用</div></div>` : ""}`).join("") || '<div class="empty">这个分组还没有 MOD</div>'}</div>` : ""}
                 </section>`;
             }).join("") || '<div class="empty">还没有导入任何 MOD</div>'}
           </div>
@@ -337,9 +366,7 @@ function render() {
             <div class="field">
               <span>部署行为</span>
               <label class="check"><input type="checkbox" data-role="setting" data-key="checkGameRunning" ${state.settings.checkGameRunning ? "checked" : ""} /> 游戏运行时阻止修改</label>
-              <label class="check"><input type="checkbox" data-role="setting" data-key="fixPakNumber" ${state.settings.fixPakNumber ? "checked" : ""} /> 自动修复 PAK 编号</label>
-              <label class="check"><input type="checkbox" data-role="setting" data-key="usePakModsDir" ${state.settings.usePakModsDir ? "checked" : ""} /> 使用 pak_mods 文件夹（崛起/荒野）</label>
-              <div class="muted" style="font-size:12px">开启后 PAK 按列表顺序命名为 X0000-MOD名.pak 部署到游戏根目录 pak_mods；关闭则按原方式重命名后放根目录。</div>
+              <div class="muted" style="font-size:12px">崛起/荒野的PAK文件将放入游戏根目录的pak_mods文件夹，请确保reframework前置已更新到支持的版本。</div>
             </div>
             <div class="field">
               <span>安装源文件</span>
@@ -369,6 +396,7 @@ function render() {
              <div class="actions mod-tools">
                <button class="primary" data-action="update-mod" data-id="${active.id}" ${state.busy ? "disabled" : ""}>↻ 更新 MOD</button>
                <button class="btn" data-action="open-mod-folder" data-id="${active.id}" ${state.busy ? "disabled" : ""}>▣ 查看文件</button>
+               ${active.homeUrl ? `<button class="btn" data-action="open-nexus" data-url="${esc(active.homeUrl)}" ${state.busy ? "disabled" : ""}>访问N网页面</button>` : ""}
                <button class="btn danger" data-action="uninstall" data-id="${active.id}" title="删除 MOD" ${state.busy ? "disabled" : ""}><svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><span>删除 MOD</span></button>
              </div>
            ` : `
@@ -403,6 +431,12 @@ function render() {
 
 function onClick(event) {
   if (event.target.closest("select, option, input, textarea, label")) return;
+  if (state.bundleOpenId != null &&
+      !event.target.closest(".comp-panel") &&
+      event.target.closest("[data-action]")?.dataset.action !== "toggle-components") {
+    state.bundleOpenId = null;
+    render();
+  }
   const target = event.target.closest("[data-action]");
   if (!target || !state.game) return;
   if (target.closest("[data-stop]") && !event.target.closest("[data-action]")) return;
@@ -451,6 +485,29 @@ function onClick(event) {
     render();
     return;
   }
+  if (action === "toggle-components") {
+    state.bundleOpenId = state.bundleOpenId === id ? null : id;
+    render();
+    return;
+  }
+  if (action === "comp-enable") {
+    const modId = Number(target.dataset.mod);
+    const compId = Number(target.dataset.comp);
+    run(() => request(`/api/games/${gameId}/mods/${modId}/components/${compId}/enable`, {
+      method: "POST",
+      body: JSON.stringify({ enabled: target.dataset.on !== "true" })
+    }));
+    return;
+  }
+  if (action === "comp-up" || action === "comp-down") {
+    const modId = Number(target.dataset.mod);
+    const compId = Number(target.dataset.comp);
+    run(() => request(`/api/games/${gameId}/mods/${modId}/components/${compId}/move`, {
+      method: "POST",
+      body: JSON.stringify({ delta: action === "comp-up" ? -1 : 1 })
+    }));
+    return;
+  }
   if (action === "select-all") {
     visibleGroups().forEach(group => {
       if (group.collapsed && !state.search.trim()) return;
@@ -486,6 +543,10 @@ function onClick(event) {
   }
   if (action === "open-mod-folder") {
     openModFolder(id);
+    return;
+  }
+  if (action === "open-nexus") {
+    openExternal(target.dataset.url);
     return;
   }
   if (action === "clean") {
@@ -640,13 +701,11 @@ function onChange(event) {
 
 async function saveSettings() {
   const checkGameRunning = app.querySelector('[data-key="checkGameRunning"]')?.checked ?? state.settings.checkGameRunning;
-  const fixPakNumber = app.querySelector('[data-key="fixPakNumber"]')?.checked ?? state.settings.fixPakNumber;
-  const usePakModsDir = app.querySelector('[data-key="usePakModsDir"]')?.checked ?? state.settings.usePakModsDir;
   const installOption = Number(app.querySelector("[data-role='install-option']")?.value ?? state.settings.installOption);
   await run(async () => {
     const data = await request("/api/settings", {
       method: "PUT",
-      body: JSON.stringify({ checkGameRunning, fixPakNumber, usePakModsDir, installOption })
+      body: JSON.stringify({ checkGameRunning, installOption })
     });
     applyWorkspace(data.workspace, "设置已保存");
     return data.workspace;
@@ -733,6 +792,18 @@ async function openGameFolder() {
   render();
 }
 
+function openExternal(url) {
+  if (!url) return;
+  if (window.mhModManager?.openExternal) {
+    window.mhModManager.openExternal(url).then(error => {
+      if (error) state.status = `无法打开链接: ${error}`;
+      render();
+    });
+    return;
+  }
+  window.open(url, "_blank", "noopener");
+}
+
 async function openModFolder(id) {
   if (!window.mhModManager?.openPath || !state.game) {
     state.status = "当前环境无法打开文件夹";
@@ -774,9 +845,15 @@ async function start() {
   app.addEventListener("input", onInput);
   app.addEventListener("change", onChange);
   window.addEventListener("keydown", event => {
-    if (event.key === "Escape" && state.equipPicker && !state.busy) {
-      state.equipPicker = null;
-      render();
+    if (event.key === "Escape" && !state.busy) {
+      if (state.bundleOpenId != null) {
+        state.bundleOpenId = null;
+        render();
+      }
+      if (state.equipPicker) {
+        state.equipPicker = null;
+        render();
+      }
     }
   });
   render();

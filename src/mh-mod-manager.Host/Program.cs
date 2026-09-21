@@ -7,6 +7,7 @@ using MhModManager.Models;
 var dataRoot = ResolveDataRoot(args);
 AppPaths.Configure(dataRoot);
 AppPaths.EnsureCreated();
+LegacyDataCleanup.CleanupLegacyBackups();
 Console.WriteLine($"mh-mod-manager data: {AppPaths.Root}");
 
 var settings = new SettingsStore();
@@ -77,27 +78,8 @@ app.MapPut("/api/settings", (SettingsRequest body) =>
 {
     lock (gate)
     {
-        var oldUsePakModsDir = settings.Current.UsePakModsDir;
         settings.Current.CheckGameRunning = body.CheckGameRunning;
-        settings.Current.FixPakNumber = body.FixPakNumber;
-        settings.Current.UsePakModsDir = body.UsePakModsDir;
         settings.Current.InstallOption = body.InstallOption;
-        try
-        {
-            if (oldUsePakModsDir != body.UsePakModsDir)
-            {
-                service.SetPakModsMode(body.UsePakModsDir);
-            }
-        }
-        catch (Exception ex)
-        {
-            settings.Current.UsePakModsDir = oldUsePakModsDir;
-            var rollback = ApiMapper.Bootstrap(service, settings);
-            rollback.Status = ex.Message;
-            rollback.Error = true;
-            return Results.Json(rollback);
-        }
-
         settings.Save();
         return Results.Json(ApiMapper.Bootstrap(service, settings));
     }
@@ -174,9 +156,21 @@ app.MapPost("/api/games/{gameId}/mods/{modId}/update", (GameId gameId, int modId
         }
 
         var batch = service.Update(game, RequireMod(service, game, modId), path);
-        return batch.Group is not null
-            ? $"已用合集替换，导入 {batch.Mods.Count} 个 MOD 到 {batch.Group.Name}"
-            : $"已更新 {batch.Mods[0].DisplayName}";
+        return $"已更新 {batch.Mods[0].DisplayName}";
+    }));
+
+app.MapPost("/api/games/{gameId}/mods/{modId}/components/{componentId}/enable", (GameId gameId, int modId, int componentId, EnableRequest body) =>
+    Mutate(gameId, service, settings, gate, game =>
+    {
+        service.SetComponentEnabled(game, RequireMod(service, game, modId), componentId, body.Enabled);
+        return body.Enabled ? "已开启组件" : "已关闭组件";
+    }));
+
+app.MapPost("/api/games/{gameId}/mods/{modId}/components/{componentId}/move", (GameId gameId, int modId, int componentId, DeltaRequest body) =>
+    Mutate(gameId, service, settings, gate, game =>
+    {
+        service.MoveComponent(game, RequireMod(service, game, modId), componentId, body.Delta);
+        return "组件顺序已更新";
     }));
 
 app.MapPost("/api/games/{gameId}/mods/{modId}/group", (GameId gameId, int modId, GroupIdRequest body) =>
@@ -268,13 +262,15 @@ app.MapPost("/api/games/{gameId}/launch", (GameId gameId) =>
     }
 });
 
-app.MapGet("/api/games/{gameId}/mods/{modId}/preview", (GameId gameId, int modId) =>
+app.MapGet("/api/games/{gameId}/mods/{modId}/preview", (GameId gameId, int modId, int? component) =>
 {
     lock (gate)
     {
         var game = GameProfile.Get(gameId);
         var mod = RequireMod(service, game, modId);
-        var path = service.PreviewPath(game, mod);
+        var path = component is int componentId
+            ? service.ComponentPreviewPath(game, mod, componentId)
+            : service.PreviewPath(game, mod);
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
             return Results.NotFound();
@@ -301,7 +297,18 @@ app.MapGet("/api/games/{gameId}/equipment", (GameId gameId, string? kind) =>
         foreach (var mod in service.GetMods(game))
         {
             var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
-            foreach (var item in EquipmentResolver.Resolve(game.Id, mod.Files, Directory.Exists(filesDir) ? filesDir : null))
+            var resolved = mod.IsBundle
+                ? mod.Components.SelectMany(component =>
+                {
+                    var prefix = $"c{component.Id}/";
+                    var baseDir = Path.Combine(filesDir, prefix);
+                    var files = component.Files
+                        .Where(file => file.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                        .Select(file => file[prefix.Length..]);
+                    return EquipmentResolver.Resolve(gameId, files, Directory.Exists(baseDir) ? baseDir : null);
+                })
+                : EquipmentResolver.Resolve(gameId, mod.Files, Directory.Exists(filesDir) ? filesDir : null);
+            foreach (var item in resolved)
             {
                 used.Add((item.Kind, item.Id));
             }
@@ -428,7 +435,30 @@ static string ResolveDataRoot(string[] args)
 }
 
 internal sealed record PathRequest(string? Path);
-internal sealed record SettingsRequest(bool CheckGameRunning, bool FixPakNumber, bool UsePakModsDir, int InstallOption);
+internal sealed record SettingsRequest(bool CheckGameRunning, int InstallOption);
+
+internal static class LegacyDataCleanup
+{
+    // 旧版曾把被覆盖文件备份到 games/<appId>/backups；备份机制移除后这些数据不再使用。
+    public static void CleanupLegacyBackups()
+    {
+        foreach (var game in GameProfile.All)
+        {
+            try
+            {
+                var dir = Path.Combine(AppPaths.GameDir(game.SteamAppId), "backups");
+                if (Directory.Exists(dir))
+                {
+                    Directory.Delete(dir, true);
+                }
+            }
+            catch
+            {
+                // 清理失败不阻断启动。
+            }
+        }
+    }
+}
 internal sealed record ImportRequest(List<string>? Paths);
 internal sealed record EnableRequest(bool Enabled);
 internal sealed record DeltaRequest(int Delta);

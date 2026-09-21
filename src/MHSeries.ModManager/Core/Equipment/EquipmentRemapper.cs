@@ -35,7 +35,8 @@ internal static class EquipmentRemapper
             if (IsPakPatch(relative) && game != GameId.World)
             {
                 changed += PakReader.RewritePaths(source, PakFileIndex.For(game), path =>
-                    MapInternal(game, kind, fromId, toId, isPfb, withTex, path));
+                    MapInternal(game, kind, fromId, toId, isPfb, withTex, path),
+                    path => AvpContentFor(game, kind, fromId, toId, path));
                 continue;
             }
 
@@ -52,6 +53,13 @@ internal static class EquipmentRemapper
 
             var dest = Path.Combine(filesDir, destRelative.Replace('/', Path.DirectorySeparatorChar));
             moves.Add((source, dest));
+            if (AvpPatcher.IsAvpFile(destRelative)
+                && AvpPatcher.Build(game, kind, toId) is { } avpBytes)
+            {
+                // 内容先按目标 ID 重写，再随 moves 一起改名；否则改了名游戏内仍指向旧装备。
+                File.WriteAllBytes(source, avpBytes);
+                changed++;
+            }
         }
 
         if (moves.Count > 0)
@@ -80,6 +88,23 @@ internal static class EquipmentRemapper
         return EquipmentPathRewriter.TryRewrite(game, kind, fromId, toId, path, out var next)
             ? next
             : null;
+    }
+
+    private static byte[]? AvpContentFor(GameId game, EquipKind kind, int fromId, int toId, string path)
+    {
+        if (!AvpPatcher.IsAvpFile(path))
+        {
+            return null;
+        }
+
+        var normalized = EquipmentResolver.Normalize(path.Replace('\\', '/').ToLowerInvariant());
+        if (!EquipmentResolver.TryParse(game, normalized, out var parsedKind, out var parsedId, out _)
+            || parsedKind != kind || parsedId != fromId)
+        {
+            return null;
+        }
+
+        return AvpPatcher.Build(game, kind, toId);
     }
 
     private static bool ShouldRewrite(string path, bool isPfb, bool withTex)

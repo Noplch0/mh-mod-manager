@@ -469,37 +469,11 @@ public static class ModLayoutParser
         return game.Id == GameId.World ? "nativePC" : "";
     }
 
-    public static int ParsePakNumber(string path)
-    {
-        var name = Path.GetFileName(path);
-        var lastDot = name.LastIndexOf('.');
-        var lastUnderscore = name.LastIndexOf('_');
-        if (lastUnderscore < 0 || lastDot <= lastUnderscore)
-        {
-            return 0;
-        }
-
-        return int.TryParse(name[(lastUnderscore + 1)..lastDot], out var n) ? n : 0;
-    }
-
-    public static string FormatPakName(string prefix, int index) => $"{prefix}{index:000}.pak";
-
     public static bool IsPakFile(string relative)
     {
         var normalized = relative.Replace('\\', '/');
         return normalized.EndsWith(".pak", StringComparison.OrdinalIgnoreCase)
                && !normalized.Contains('/');
-    }
-
-    public static bool CanBackup(GameProfile game, string relative)
-    {
-        var path = relative.Replace('\\', '/').ToLowerInvariant();
-        if (!IsSafeDeploymentPath(game, path))
-        {
-            return false;
-        }
-
-        return !path.EndsWith(".pak", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? FindNestedRoot(GameProfile game, string root)
@@ -581,6 +555,9 @@ public static class ModLayoutParser
                         break;
                     case "description":
                         parsed.Description = value.Replace("\\n", "\n");
+                        break;
+                    case "nameasbundle":
+                        parsed.BundleName = value;
                         break;
                 }
             }

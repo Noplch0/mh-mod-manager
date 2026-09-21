@@ -122,6 +122,14 @@ ipcMain.handle("open-path", async (_event, folder) => {
   return shell.openPath(folder);
 });
 
+ipcMain.handle("open-external", async (_event, url) => {
+  // 只放行 Nexus 站内链接，避免渲染层被诱导打开任意外部地址。
+  if (typeof url !== "string" || !/^https:\/\/www\.nexusmods\.com\//i.test(url)) {
+    return "已阻止外部链接";
+  }
+  return shell.openExternal(url);
+});
+
 ipcMain.handle("api-base", () => API);
 
 app.whenReady().then(async () => {

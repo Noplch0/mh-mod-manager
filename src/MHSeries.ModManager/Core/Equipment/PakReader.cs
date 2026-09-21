@@ -32,7 +32,7 @@ internal static class PakReader
         return result;
     }
 
-    public static int RewritePaths(string pakPath, PakFileIndex index, Func<string, string?> map)
+    public static int RewritePaths(string pakPath, PakFileIndex index, Func<string, string?> map, Func<string, byte[]?>? contentPatch = null)
     {
         if (!TryOpenTable(pakPath, out var table))
         {
@@ -42,6 +42,7 @@ internal static class PakReader
         using (table)
         {
             var changed = 0;
+            var pending = new List<(int Entry, byte[] Payload)>();
             for (var i = 0; i < table.TotalFiles; i++)
             {
                 var hash = table.ReadHash(i);
@@ -51,25 +52,43 @@ internal static class PakReader
                     continue;
                 }
 
-                var next = map(raw.Replace('\\', '/'));
-                if (string.IsNullOrWhiteSpace(next) || next.Equals(raw.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                var normalized = raw.Replace('\\', '/');
+                var entryChanged = false;
+                if (contentPatch is not null && table.SupportsContentPatch)
                 {
-                    continue;
+                    var payload = contentPatch(normalized);
+                    if (payload is not null)
+                    {
+                        pending.Add((i, payload));
+                        entryChanged = true;
+                    }
                 }
 
-                if (raw.Contains('\\'))
+                var next = map(normalized);
+                if (!string.IsNullOrWhiteSpace(next) && !next.Equals(normalized, StringComparison.OrdinalIgnoreCase))
                 {
-                    next = next.Replace('/', '\\');
+                    if (raw.Contains('\\'))
+                    {
+                        next = next.Replace('/', '\\');
+                    }
+
+                    var newHash = PakHash.PathHash(next);
+                    if (newHash != hash)
+                    {
+                        table.WriteHash(i, newHash);
+                        entryChanged = true;
+                    }
                 }
 
-                var newHash = PakHash.PathHash(next);
-                if (newHash == hash)
+                if (entryChanged)
                 {
-                    continue;
+                    changed++;
                 }
+            }
 
-                table.WriteHash(i, newHash);
-                changed++;
+            if (pending.Count > 0)
+            {
+                AppendPayloads(pakPath, table, pending);
             }
 
             if (changed > 0)
@@ -78,6 +97,24 @@ internal static class PakReader
             }
 
             return changed;
+        }
+    }
+
+    /// <summary>
+    /// avp 等内容替换采用“追加式”：新数据以未压缩条目写到文件末尾，
+    /// 只更新该条目的 offset/size 字段，其余条目与数据零改动。
+    /// 已用真实 MOD pak 实证 v4 条目布局：hash@0、offset@8、uncompressedSize@16、compressedSize@24（@32 起未用），
+    /// 且 MOD pak 的条目全部是未压缩存储（compressedSize == uncompressedSize）。
+    /// </summary>
+    private static void AppendPayloads(string pakPath, PakTable table, List<(int Entry, byte[] Payload)> pending)
+    {
+        using var stream = new FileStream(pakPath, FileMode.Open, FileAccess.Write, FileShare.Read);
+        stream.Seek(0, SeekOrigin.End);
+        foreach (var (entry, payload) in pending)
+        {
+            var offset = stream.Position;
+            stream.Write(payload, 0, payload.Length);
+            table.WriteLocation(entry, offset, payload.Length, payload.Length);
         }
     }
 
@@ -196,6 +233,18 @@ internal static class PakReader
 
         public int TotalFiles { get; }
 
+        /// <summary>只有 v4 的条目位置字段经过实证，v2 仅支持路径哈希改写。</summary>
+        public bool SupportsContentPatch => _major == 4;
+
+        public void WriteLocation(int index, long location, long uncompressedSize, long compressedSize)
+        {
+            var entryOffset = index * _entrySize;
+            WriteUInt64(entryOffset + 8, (ulong)location);
+            WriteUInt64(entryOffset + 16, (ulong)uncompressedSize);
+            WriteUInt64(entryOffset + 24, (ulong)compressedSize);
+            _dirty = true;
+        }
+
         public IEnumerable<ulong> Hashes()
         {
             for (var i = 0; i < TotalFiles; i++)
@@ -271,6 +320,14 @@ internal static class PakReader
             _table[offset + 1] = (byte)(value >> 8);
             _table[offset + 2] = (byte)(value >> 16);
             _table[offset + 3] = (byte)(value >> 24);
+        }
+
+        private void WriteUInt64(int offset, ulong value)
+        {
+            for (var i = 0; i < 8; i++)
+            {
+                _table[offset + i] = (byte)(value >> (8 * i));
+            }
         }
     }
 }
