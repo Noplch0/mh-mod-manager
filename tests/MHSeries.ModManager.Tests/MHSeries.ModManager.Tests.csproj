@@ -14,4 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/MHSeries.ModManager/MHSeries.ModManager.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Testdata\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

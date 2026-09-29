@@ -102,14 +102,27 @@ app.MapPost("/api/games/{gameId}/import", (GameId gameId, ImportRequest body) =>
         var imported = 0;
         string? lastName = null;
         var failures = new List<string>();
-        foreach (var path in ExpandImportPaths(body.Paths ?? []))
+        var pending = ExpandImportPaths(body.Paths ?? []);
+        string? passwordFile = null;
+        var passwordMessage = string.Empty;
+        List<string>? pendingPaths = null;
+        for (var i = 0; i < pending.Count; i++)
         {
+            var path = pending[i];
             var label = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
             try
             {
-                var batch = service.Import(game, path);
+                var batch = service.Import(game, path, null, body.Passwords);
                 imported += batch.Mods.Count;
                 lastName = batch.Group?.Name ?? batch.Mods.LastOrDefault()?.DisplayName;
+            }
+            catch (PasswordRequiredException ex)
+            {
+                // 批次在此中断:已导入的保留,剩余路径由前端拿到密码后重发。
+                passwordFile = path;
+                passwordMessage = ex.Message;
+                pendingPaths = pending.Skip(i).ToList();
+                break;
             }
             catch (Exception ex)
             {
@@ -118,9 +131,21 @@ app.MapPost("/api/games/{gameId}/import", (GameId gameId, ImportRequest body) =>
         }
 
         var workspace = ApiMapper.Workspace(service, settings, gameId);
-        workspace.Status = failures.Count == 0
-            ? imported == 1 && lastName is not null ? $"已导入 {lastName}" : $"已导入 {imported} 个 MOD"
-            : $"已导入 {imported} 个，失败 {failures.Count} 个。{failures.FirstOrDefault()}";
+        if (passwordFile is not null)
+        {
+            workspace.NeedPassword = true;
+            workspace.Error = true;
+            workspace.PasswordFile = passwordFile;
+            workspace.PendingPaths = pendingPaths;
+            workspace.Status = imported > 0 ? $"已导入 {imported} 个。{passwordMessage}" : passwordMessage;
+        }
+        else
+        {
+            workspace.Status = failures.Count == 0
+                ? imported == 1 && lastName is not null ? $"已导入 {lastName}" : $"已导入 {imported} 个 MOD"
+                : $"已导入 {imported} 个，失败 {failures.Count} 个。{failures.FirstOrDefault()}";
+        }
+
         return Results.Json(workspace);
     }
 });
@@ -155,7 +180,7 @@ app.MapPost("/api/games/{gameId}/mods/{modId}/update", (GameId gameId, int modId
             throw new InvalidOperationException("请选择要更新的压缩包");
         }
 
-        var batch = service.Update(game, RequireMod(service, game, modId), path);
+        var batch = service.Update(game, RequireMod(service, game, modId), path, null, body.Passwords);
         return $"已更新 {batch.Mods[0].DisplayName}";
     }));
 
@@ -363,6 +388,14 @@ static IResult Mutate(GameId gameId, ModService service, SettingsStore settings,
             workspace.Status = status;
             return Results.Json(workspace);
         }
+        catch (PasswordRequiredException ex)
+        {
+            var workspace = ApiMapper.Workspace(service, settings, gameId);
+            workspace.Status = ex.Message;
+            workspace.Error = true;
+            workspace.NeedPassword = true;
+            return Results.Json(workspace);
+        }
         catch (Exception ex)
         {
             var workspace = ApiMapper.Workspace(service, settings, gameId);
@@ -459,7 +492,7 @@ internal static class LegacyDataCleanup
         }
     }
 }
-internal sealed record ImportRequest(List<string>? Paths);
+internal sealed record ImportRequest(List<string>? Paths, List<string>? Passwords = null);
 internal sealed record EnableRequest(bool Enabled);
 internal sealed record DeltaRequest(int Delta);
 internal sealed record GroupIdRequest(int GroupId);

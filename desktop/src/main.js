@@ -16,7 +16,8 @@ const state = {
   modRenameDrafts: {},
   bundleOpenId: null,
   equipPicker: null,
-  equipCatalog: { kind: "", items: [], loading: false }
+  equipCatalog: { kind: "", items: [], loading: false },
+  passwordPrompt: null
 };
 
 const app = document.querySelector("#app");
@@ -201,6 +202,47 @@ function renderEquipPicker() {
         </div>
       </div>
     </div>`;
+}
+
+function renderPasswordPrompt() {
+  const prompt = state.passwordPrompt;
+  if (!prompt) return "";
+  const file = String(prompt.file ?? "").split(/[\\/]/).pop();
+  return `
+    <div class="modal-mask" data-action="close-password">
+      <div class="modal" data-stop="true">
+        <div class="eyebrow">ARCHIVE PASSWORD</div>
+        <h2 class="h1" style="font-size:18px;margin:8px 0 12px">输入压缩包密码</h2>
+        <div class="muted" style="margin-bottom:10px">${esc(file)}${prompt.message ? ` · ${esc(prompt.message)}` : ""}</div>
+        <input id="import-password" type="password" placeholder="压缩包密码" autocomplete="off" spellcheck="false" style="width:100%;box-sizing:border-box" />
+        <div class="actions" style="margin-top:12px">
+          <button class="btn" data-action="close-password">取消</button>
+          <button class="primary" data-action="submit-password">确认</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function promptPassword(file, message) {
+  return new Promise(resolve => {
+    state.passwordPrompt = { file, message, resolve };
+    render();
+    document.getElementById("import-password")?.focus();
+  });
+}
+
+function closePasswordPrompt(result) {
+  const prompt = state.passwordPrompt;
+  if (!prompt) return;
+  state.passwordPrompt = null;
+  prompt.resolve(result);
+  render();
+}
+
+function submitPassword() {
+  const input = document.getElementById("import-password");
+  const value = (input?.value ?? "").trim();
+  closePasswordPrompt(value || null);
 }
 
 function switchClass(on) {
@@ -410,6 +452,7 @@ function render() {
       </footer>
       <div class="dropmask" id="dropmask"><div class="dropcard">松开以批量导入 MOD</div></div>
       ${renderEquipPicker()}
+      ${renderPasswordPrompt()}
     </div>
   `;
   const nextList = app.querySelector(".list");
@@ -625,6 +668,15 @@ function onClick(event) {
     }
     return;
   }
+  if (action === "close-password") {
+    if (target.classList.contains("modal-mask") && event.target.closest("[data-stop]")) return;
+    closePasswordPrompt(null);
+    return;
+  }
+  if (action === "submit-password") {
+    submitPassword();
+    return;
+  }
   if (action === "apply-equip") {
     applyEquipChange();
   }
@@ -748,22 +800,65 @@ async function applyEquipChange() {
 
 async function updateMod(id) {
   const path = window.mhModManager?.pickUpdate ? await window.mhModManager.pickUpdate() : "";
-  if (!path) return;
-  state.status = "正在更新 MOD...";
-  await run(() => request(`/api/games/${state.game.id}/mods/${id}/update`, {
-    method: "POST",
-    body: JSON.stringify({ paths: [path] })
-  }), "更新失败");
+  if (!path || state.busy) return;
+  state.busy = true;
+  const passwords = [];
+  try {
+    while (true) {
+      state.status = "正在更新 MOD...";
+      render();
+      const data = await request(`/api/games/${state.game.id}/mods/${id}/update`, {
+        method: "POST",
+        body: JSON.stringify({ paths: [path], passwords })
+      });
+      applyWorkspace(data);
+      if (!data.needPassword) break;
+      const password = await promptPassword(path, data.status);
+      if (password == null) {
+        state.status = "已取消更新：压缩包需要密码";
+        break;
+      }
+      passwords.push(password);
+    }
+  } catch (error) {
+    state.status = error.message || "更新失败";
+  } finally {
+    state.busy = false;
+    render();
+  }
 }
 
 async function importMods(paths) {
   const picked = paths ?? (window.mhModManager ? await window.mhModManager.pickMods() : []);
-  if (!picked?.length) return;
-  state.status = `正在导入 ${picked.length} 个 MOD...`;
-  await run(() => request(`/api/games/${state.game.id}/import`, {
-    method: "POST",
-    body: JSON.stringify({ paths: picked })
-  }), "导入失败");
+  if (!picked?.length || state.busy) return;
+  state.busy = true;
+  let pending = [...picked];
+  const passwords = [];
+  try {
+    while (pending.length) {
+      state.status = `正在导入 ${pending.length} 个 MOD...`;
+      render();
+      const data = await request(`/api/games/${state.game.id}/import`, {
+        method: "POST",
+        body: JSON.stringify({ paths: pending, passwords })
+      });
+      applyWorkspace(data);
+      if (!data.needPassword) break;
+      // 后端在加密包处中断批次:已导入的保留,输完密码从 pendingPaths 继续。
+      const password = await promptPassword(data.passwordFile, data.status);
+      if (password == null) {
+        state.status = "已取消导入：压缩包需要密码";
+        break;
+      }
+      passwords.push(password);
+      pending = data.pendingPaths ?? [];
+    }
+  } catch (error) {
+    state.status = error.message || "导入失败";
+  } finally {
+    state.busy = false;
+    render();
+  }
 }
 
 async function pickGame() {
@@ -845,6 +940,17 @@ async function start() {
   app.addEventListener("input", onInput);
   app.addEventListener("change", onChange);
   window.addEventListener("keydown", event => {
+    if (state.passwordPrompt) {
+      // 密码弹窗要在 busy 期间可交互:Esc 取消,回车提交。
+      if (event.key === "Escape" && !event.isComposing) {
+        event.preventDefault();
+        closePasswordPrompt(null);
+      } else if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        submitPassword();
+      }
+      return;
+    }
     if (event.key === "Escape" && !state.busy) {
       if (state.bundleOpenId != null) {
         state.bundleOpenId = null;

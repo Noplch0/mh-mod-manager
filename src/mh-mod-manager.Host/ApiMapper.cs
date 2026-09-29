@@ -168,6 +168,15 @@ internal sealed class WorkspaceDto
     public List<ModDto> Mods { get; set; } = [];
     public string Status { get; set; } = "就绪";
     public bool Error { get; set; }
+
+    /// <summary>导入/更新遇到加密压缩包:前端应弹出密码输入框,带候选密码重试。</summary>
+    public bool NeedPassword { get; set; }
+
+    /// <summary>需要密码的压缩包路径(导入批次中断时指向前端最初选择的文件)。</summary>
+    public string? PasswordFile { get; set; }
+
+    /// <summary>导入批次中尚未处理的路径(含需要密码的这一个),前端带密码后原样重发。</summary>
+    public List<string>? PendingPaths { get; set; }
 }
 
 internal sealed class GameDto

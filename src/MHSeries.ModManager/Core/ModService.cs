@@ -59,17 +59,17 @@ public sealed class ModService
         _groups.Remove(game.Id);
     }
 
-    public ParsedMod ParseImport(GameProfile game, string path, IProgress<int>? progress = null)
+    public ParsedMod ParseImport(GameProfile game, string path, IProgress<int>? progress = null, IReadOnlyList<string>? passwords = null)
     {
-        var units = ParseImportUnits(game, path, progress, out _);
+        var units = ParseImportUnits(game, path, progress, out _, passwords);
         return units.Count == 1
             ? units[0]
             : throw new InvalidOperationException("这个压缩包包含多个独立 MOD，请使用批量导入");
     }
 
-    public ImportBatch Import(GameProfile game, string path, IProgress<int>? progress = null)
+    public ImportBatch Import(GameProfile game, string path, IProgress<int>? progress = null, IReadOnlyList<string>? passwords = null)
     {
-        var units = ParseImportUnits(game, path, progress, out var bundleName);
+        var units = ParseImportUnits(game, path, progress, out var bundleName, passwords);
         if (units.Count == 0)
         {
             throw new InvalidOperationException("未能识别这个 MOD 的文件结构");
@@ -77,15 +77,15 @@ public sealed class ModService
 
         if (units.Count == 1)
         {
-            return new ImportBatch { Mods = [Install(game, units[0], null, keepSource: true)] };
+            return new ImportBatch { Mods = [Install(game, units[0], null, keepSource: true, passwords)] };
         }
 
-        return new ImportBatch { Mods = [InstallBundle(game, path, units, bundleName)] };
+        return new ImportBatch { Mods = [InstallBundle(game, path, units, bundleName, passwords)] };
     }
 
-    public ImportBatch Update(GameProfile game, ModRecord existing, string path, IProgress<int>? progress = null)
+    public ImportBatch Update(GameProfile game, ModRecord existing, string path, IProgress<int>? progress = null, IReadOnlyList<string>? passwords = null)
     {
-        var units = ParseImportUnits(game, path, progress, out var bundleName);
+        var units = ParseImportUnits(game, path, progress, out var bundleName, passwords);
         if (units.Count == 0)
         {
             throw new InvalidOperationException("未能识别这个 MOD 的文件结构");
@@ -93,15 +93,15 @@ public sealed class ModService
 
         if (units.Count == 1)
         {
-            Replace(game, existing, units[0]);
+            Replace(game, existing, units[0], passwords);
             return new ImportBatch { Mods = [existing] };
         }
 
-        ReplaceBundle(game, existing, path, units, bundleName);
+        ReplaceBundle(game, existing, path, units, bundleName, passwords);
         return new ImportBatch { Mods = [existing] };
     }
 
-    public void Replace(GameProfile game, ModRecord existing, ParsedMod parsed)
+    public void Replace(GameProfile game, ModRecord existing, ParsedMod parsed, IReadOnlyList<string>? passwords = null)
     {
         ValidateParsedMod(game, parsed);
         var wasEnabled = existing.Enabled;
@@ -168,7 +168,7 @@ public sealed class ModService
                 existing.PreviewImage = preview;
             }
 
-            existing.SourceFile = KeepSource(parsed.SourceFile, parsed.Name);
+            existing.SourceFile = KeepSource(parsed.SourceFile, parsed.Name, passwords);
             ModRepository.Save(game, existing);
         }
         catch
@@ -187,7 +187,7 @@ public sealed class ModService
     }
 
     /// <summary>多单元压缩包导入为一个组件化 MOD：组件 = 顶层文件夹 / 散装 pak。</summary>
-    private ModRecord InstallBundle(GameProfile game, string sourcePath, List<ParsedMod> units, string bundleName)
+    private ModRecord InstallBundle(GameProfile game, string sourcePath, List<ParsedMod> units, string bundleName, IReadOnlyList<string>? passwords = null)
     {
         foreach (var unit in units)
         {
@@ -226,7 +226,7 @@ public sealed class ModService
                 record.Components.Add(component);
             }
 
-            record.SourceFile = KeepSource(sourcePath, record.DisplayName);
+            record.SourceFile = KeepSource(sourcePath, record.DisplayName, passwords);
             ModRepository.Save(game, record);
             mods.Add(record);
             return record;
@@ -246,7 +246,7 @@ public sealed class ModService
     }
 
     /// <summary>用新压缩包原地重建组件化 MOD（普通 MOD 转组件化也走这里）。</summary>
-    private void ReplaceBundle(GameProfile game, ModRecord existing, string sourcePath, List<ParsedMod> units, string bundleName)
+    private void ReplaceBundle(GameProfile game, ModRecord existing, string sourcePath, List<ParsedMod> units, string bundleName, IReadOnlyList<string>? passwords = null)
     {
         foreach (var unit in units)
         {
@@ -313,7 +313,7 @@ public sealed class ModService
                 existing.Components.Add(component);
             }
 
-            existing.SourceFile = KeepSource(sourcePath, existing.DisplayName);
+            existing.SourceFile = KeepSource(sourcePath, existing.DisplayName, passwords);
             ModRepository.Save(game, existing);
         }
         finally
@@ -373,7 +373,7 @@ public sealed class ModService
         return string.IsNullOrWhiteSpace(name) ? "组件化 MOD" : name.Trim();
     }
 
-    public List<ParsedMod> ParseImportUnits(GameProfile game, string path, IProgress<int>? progress, out string bundleName)
+    public List<ParsedMod> ParseImportUnits(GameProfile game, string path, IProgress<int>? progress, out string bundleName, IReadOnlyList<string>? passwords = null)
     {
         AppPaths.EnsureCreated();
         bundleName = BundleName(path);
@@ -388,14 +388,14 @@ public sealed class ModService
             }
             else if (ArchiveExtractor.IsArchive(path))
             {
-                ArchiveExtractor.Extract(path, staging, progress);
+                ArchiveExtractor.Extract(path, staging, progress, passwords);
             }
             else
             {
                 File.Copy(path, Path.Combine(staging, Path.GetFileName(path)), true);
             }
 
-            var units = SplitImportUnits(game, path, staging);
+            var units = SplitImportUnits(game, path, staging, passwords);
             if (units.Count == 0)
             {
                 throw new InvalidOperationException("未能识别这个 MOD 的文件结构");
@@ -412,7 +412,7 @@ public sealed class ModService
 
     public ModRecord Install(GameProfile game, ParsedMod parsed) => Install(game, parsed, null, true);
 
-    public ModRecord Install(GameProfile game, ParsedMod parsed, int? groupId, bool keepSource)
+    public ModRecord Install(GameProfile game, ParsedMod parsed, int? groupId, bool keepSource, IReadOnlyList<string>? passwords = null)
     {
         ValidateParsedMod(game, parsed);
         var mods = GetMods(game);
@@ -474,7 +474,7 @@ public sealed class ModService
             }
 
             record.SourceFile = keepSource
-                ? KeepSource(parsed.SourceFile, parsed.Name)
+                ? KeepSource(parsed.SourceFile, parsed.Name, passwords)
                 : parsed.SourceFile;
             ModRepository.Save(game, record);
             mods.Add(record);
@@ -1308,7 +1308,7 @@ public sealed class ModService
         return path;
     }
 
-    private string KeepSource(string source, string name)
+    private string KeepSource(string source, string name, IReadOnlyList<string>? passwords = null)
     {
         if (!File.Exists(source) || Directory.Exists(source))
         {
@@ -1339,6 +1339,19 @@ public sealed class ModService
         else
         {
             File.Copy(source, dest, true);
+        }
+
+        // 提供过密码且副本是压缩包时重建为无密码 zip,保证后续原地更新不再需要密码。
+        // 去密码失败不影响导入:保留加密副本,下次更新可再输密码。
+        if (passwords is { Count: > 0 } && ArchiveExtractor.IsArchive(dest))
+        {
+            try
+            {
+                dest = ArchivePasswordStripper.Strip(dest, passwords) ?? dest;
+            }
+            catch
+            {
+            }
         }
 
         return dest;
@@ -1375,13 +1388,13 @@ public sealed class ModService
         }
     }
 
-    private List<ParsedMod> SplitImportUnits(GameProfile game, string sourcePath, string staging)
+    private List<ParsedMod> SplitImportUnits(GameProfile game, string sourcePath, string staging, IReadOnlyList<string>? passwords = null)
     {
         var root = ArchiveExtractor.UnwrapRoot(staging);
         var candidates = DiscoverImportCandidates(root);
         if (LooksLikeSinglePackage(root) || candidates.Count <= 1)
         {
-            ArchiveExtractor.ExtractNested(staging);
+            ArchiveExtractor.ExtractNested(staging, passwords);
             return [ParseUnit(game, sourcePath, staging, "")];
         }
 
@@ -1399,7 +1412,7 @@ public sealed class ModService
                 File.Copy(candidate, Path.Combine(childStaging, Path.GetFileName(candidate)), true);
             }
 
-            ArchiveExtractor.ExtractNested(childStaging);
+            ArchiveExtractor.ExtractNested(childStaging, passwords);
             var parsed = TryParseUnit(game, sourcePath, childStaging, UnitName(candidate));
             if (parsed is not null)
             {
@@ -1418,7 +1431,7 @@ public sealed class ModService
                 TryDelete(parsed.StagingDir);
             }
 
-            ArchiveExtractor.ExtractNested(staging);
+            ArchiveExtractor.ExtractNested(staging, passwords);
             return [ParseUnit(game, sourcePath, staging, "")];
         }
 
