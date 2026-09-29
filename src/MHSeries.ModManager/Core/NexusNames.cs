@@ -148,6 +148,29 @@ public static class NexusNames
             versionStart--;
         }
 
+        // 版本段可以带非数字词（如 "名称-17-REF-1-3-1-时间戳" 的 "REF-1-3-1"）：
+        // 数字段前若还有连续非数字词，继续向前吸收，词块左侧的数字段才是 id；
+        // 名称与版本都可能出现 "数字-词" 相邻，这里按"词属于版本"优先，吸收到头没有数字段时维持原判定。
+        if (versionStart > 0 && !VersionToken.IsMatch(tokens[versionStart - 1]))
+        {
+            var wordStart = versionStart;
+            while (wordStart > 0 && !VersionToken.IsMatch(tokens[wordStart - 1]))
+            {
+                wordStart--;
+            }
+
+            if (wordStart > 0 && int.TryParse(tokens[wordStart - 1], out var wordId) && wordId > 0)
+            {
+                var idIndex = wordStart - 1;
+                if (idIndex > 0)
+                {
+                    var wordName = string.Join(' ', tokens[..idIndex]);
+                    var wordVersion = string.Join('.', tokens[(idIndex + 1)..versionEnd].Select(StripVersionPrefix));
+                    return (wordName, wordId, wordVersion);
+                }
+            }
+        }
+
         // 连续段 run = [versionStart, versionEnd)：最左段是 id，其余是版本。
         if (versionStart == 0 || versionStart == versionEnd ||
             !int.TryParse(tokens[versionStart], out var modId) || modId <= 0)
