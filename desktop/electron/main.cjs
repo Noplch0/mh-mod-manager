@@ -55,7 +55,7 @@ async function waitForHost() {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1440,
+    width: 1500,
     height: 900,
     minWidth: 1100,
     minHeight: 720,
