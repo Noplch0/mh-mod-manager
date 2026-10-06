@@ -54,6 +54,14 @@ app.MapGet("/api/workspace/{gameId}", (GameId gameId) =>
     }
 });
 
+app.MapGet("/api/games/{gameId}/game-running", (GameId gameId) =>
+{
+    lock (gate)
+    {
+        return Results.Json(new { running = service.IsBlockedByRunningGame(GameProfile.Get(gameId)) });
+    }
+});
+
 app.MapPost("/api/games/{gameId}/select", (GameId gameId) =>
 {
     lock (gate)
@@ -144,6 +152,7 @@ app.MapPost("/api/games/{gameId}/import", (GameId gameId, ImportRequest body) =>
             workspace.Status = failures.Count == 0
                 ? imported == 1 && lastName is not null ? $"已导入 {lastName}" : $"已导入 {imported} 个 MOD"
                 : $"已导入 {imported} 个，失败 {failures.Count} 个。{failures.FirstOrDefault()}";
+            workspace.Error = failures.Count > 0;
         }
 
         return Results.Json(workspace);

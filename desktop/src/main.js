@@ -6,6 +6,7 @@ const state = {
   groups: [],
   mods: [],
   status: "正在连接后端...",
+  statusError: false,
   busy: false,
   search: "",
   selectedIds: new Set(),
@@ -57,6 +58,8 @@ function applyWorkspace(data, status) {
   if (data.mods) state.mods = data.mods;
   if (data.games) state.games = data.games;
   state.status = status ?? data.status ?? state.status;
+  // 覆盖式消息(如"设置已保存")视为正常;否则跟随后端的 Error 标记决定警告色。
+  state.statusError = status != null ? false : Boolean(data.error);
   if (gameChanged) {
     state.renameDrafts = {};
     state.modRenameDrafts = {};
@@ -109,6 +112,7 @@ async function run(task, fallback = "操作失败") {
     applyWorkspace(data);
   } catch (error) {
     state.status = error.message || fallback;
+    state.statusError = true;
   } finally {
     state.busy = false;
     render();
@@ -257,7 +261,7 @@ function componentCounts(mod) {
 function renderComponentRows(mod, coverSize) {
   const comps = mod.components ?? [];
   return comps.map((comp, index) => `
-    <div class="comp-row">
+    <div class="comp-row" data-mod="${mod.id}" data-comp="${comp.id}"${comp.hasPreview ? ` data-preview="${esc(apiUrl(comp.previewUrl))}"` : ""}>
       <span class="comp-cover" style="width:${coverSize}px;height:${coverSize}px">${comp.hasPreview ? `<img src="${esc(apiUrl(comp.previewUrl))}" alt="" />` : '<span class="muted">◇</span>'}</span>
       <span class="comp-name" title="${esc(comp.name)}">${esc(comp.name)}</span>
       <span class="comp-tools">
@@ -447,7 +451,7 @@ function render() {
         </aside>
       </div>
       <footer class="footer">
-        <span class="muted">${state.busy ? "处理中..." : esc(state.status)}</span>
+        <span class="${state.busy ? "muted" : state.statusError ? "status-error" : "muted"}">${state.busy ? "处理中..." : esc(state.status)}</span>
         <button class="btn" data-action="clean" ${state.busy || !game?.installed ? "disabled" : ""}>清理部署文件</button>
       </footer>
       <div class="dropmask" id="dropmask"><div class="dropcard">松开以批量导入 MOD</div></div>
@@ -530,6 +534,11 @@ function onClick(event) {
   }
   if (action === "toggle-components") {
     state.bundleOpenId = state.bundleOpenId === id ? null : id;
+    // 展开哪个主 MOD,右侧详情就显示哪个;收起不改选中。
+    if (state.bundleOpenId === id) {
+      state.activeId = id;
+      state.pane = "mod";
+    }
     render();
     return;
   }
@@ -774,6 +783,7 @@ async function openEquipPicker(kind, id, isPfb) {
     state.equipCatalog = { kind, items: data.items ?? [] };
   } catch (error) {
     state.status = error.message || "无法加载装备列表";
+    state.statusError = true;
     state.equipPicker = null;
   }
   render();
@@ -799,13 +809,23 @@ async function applyEquipChange() {
 }
 
 async function updateMod(id) {
-  const path = window.mhModManager?.pickUpdate ? await window.mhModManager.pickUpdate() : "";
-  if (!path || state.busy) return;
+  if (state.busy || !state.game) return;
   state.busy = true;
-  const passwords = [];
   try {
+    // 弹出文件选择框之前先预检游戏是否运行,避免选完文件才被拒绝。
+    const check = await request(`/api/games/${state.game.id}/game-running`);
+    if (check.running) {
+      state.status = "游戏正在运行，请先关闭游戏";
+      state.statusError = true;
+      return;
+    }
+
+    const path = window.mhModManager?.pickUpdate ? await window.mhModManager.pickUpdate() : "";
+    if (!path) return;
+    const passwords = [];
     while (true) {
       state.status = "正在更新 MOD...";
+      state.statusError = false;
       render();
       const data = await request(`/api/games/${state.game.id}/mods/${id}/update`, {
         method: "POST",
@@ -816,12 +836,14 @@ async function updateMod(id) {
       const password = await promptPassword(path, data.status);
       if (password == null) {
         state.status = "已取消更新：压缩包需要密码";
+        state.statusError = true;
         break;
       }
       passwords.push(password);
     }
   } catch (error) {
     state.status = error.message || "更新失败";
+    state.statusError = true;
   } finally {
     state.busy = false;
     render();
@@ -837,6 +859,7 @@ async function importMods(paths) {
   try {
     while (pending.length) {
       state.status = `正在导入 ${pending.length} 个 MOD...`;
+      state.statusError = false;
       render();
       const data = await request(`/api/games/${state.game.id}/import`, {
         method: "POST",
@@ -848,6 +871,7 @@ async function importMods(paths) {
       const password = await promptPassword(data.passwordFile, data.status);
       if (password == null) {
         state.status = "已取消导入：压缩包需要密码";
+        state.statusError = true;
         break;
       }
       passwords.push(password);
@@ -855,6 +879,7 @@ async function importMods(paths) {
     }
   } catch (error) {
     state.status = error.message || "导入失败";
+    state.statusError = true;
   } finally {
     state.busy = false;
     render();
@@ -874,16 +899,19 @@ async function openGameFolder() {
   const folder = state.game?.path;
   if (!folder) {
     state.status = "未设置游戏目录";
+    state.statusError = true;
     render();
     return;
   }
   if (!window.mhModManager?.openPath) {
     state.status = "当前环境无法打开文件夹";
+    state.statusError = true;
     render();
     return;
   }
   const error = await window.mhModManager.openPath(folder);
   state.status = error ? `无法打开目录: ${error}` : "已打开游戏目录";
+  state.statusError = Boolean(error);
   render();
 }
 
@@ -891,7 +919,10 @@ function openExternal(url) {
   if (!url) return;
   if (window.mhModManager?.openExternal) {
     window.mhModManager.openExternal(url).then(error => {
-      if (error) state.status = `无法打开链接: ${error}`;
+      if (error) {
+        state.status = `无法打开链接: ${error}`;
+        state.statusError = true;
+      }
       render();
     });
     return;
@@ -902,6 +933,7 @@ function openExternal(url) {
 async function openModFolder(id) {
   if (!window.mhModManager?.openPath || !state.game) {
     state.status = "当前环境无法打开文件夹";
+    state.statusError = true;
     render();
     return;
   }
@@ -910,8 +942,10 @@ async function openModFolder(id) {
     const result = await request(`/api/games/${state.game.id}/mods/${id}/folder`);
     const error = await window.mhModManager.openPath(result.path);
     state.status = error ? `无法打开 MOD 文件夹: ${error}` : "已打开 MOD 文件夹";
+    state.statusError = Boolean(error);
   } catch (error) {
     state.status = error.message || "无法打开 MOD 文件夹";
+    state.statusError = true;
   }
   render();
 }
@@ -935,10 +969,38 @@ function setupDrop() {
   });
 }
 
+// 悬停组件行时,把右侧详情大图换成该组件封面;移出后恢复为主 MOD 封面。
+// 纯视觉态:直接换 img.src,不走 render(),任何重渲染后自然回到主 MOD 封面。
+function setupHoverPreview() {
+  const restore = () => {
+    const img = app.querySelector(".preview-box img");
+    const active = activeMod();
+    if (img && active) img.src = previewSrc(active);
+  };
+  app.addEventListener("mouseover", event => {
+    const row = event.target.closest(".comp-row");
+    const img = app.querySelector(".preview-box img");
+    const active = activeMod();
+    if (!row || !img || !active) return;
+    const url = row.dataset.preview;
+    // 仅当右侧详情显示的正是该组件所属主 MOD 时才换图;无封面的组件不换。
+    if (!url || active.id !== Number(row.dataset.mod)) return;
+    if (img.getAttribute("src") !== url) img.src = url;
+  });
+  app.addEventListener("mouseout", event => {
+    const row = event.target.closest(".comp-row");
+    if (!row) return;
+    const next = event.relatedTarget;
+    if (next && next.closest && next.closest(".comp-row") === row) return;
+    restore();
+  });
+}
+
 async function start() {
   app.addEventListener("click", onClick);
   app.addEventListener("input", onInput);
   app.addEventListener("change", onChange);
+  setupHoverPreview();
   window.addEventListener("keydown", event => {
     if (state.passwordPrompt) {
       // 密码弹窗要在 busy 期间可交互:Esc 取消,回车提交。
@@ -967,8 +1029,10 @@ async function start() {
   try {
     await loadBootstrap();
     state.status = "就绪";
+    state.statusError = false;
   } catch (error) {
     state.status = error.message || "无法连接后端";
+    state.statusError = true;
   }
   render();
 }
