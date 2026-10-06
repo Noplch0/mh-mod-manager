@@ -1011,6 +1011,10 @@ public sealed class ModService
         return Process.GetProcessesByName(name).Length > 0;
     }
 
+    /// <summary>供前端在打开文件选择前预检:开启了运行阻止且游戏进程存在。</summary>
+    public bool IsBlockedByRunningGame(GameProfile game) =>
+        _settings.Current.CheckGameRunning && IsGameRunning(game);
+
     public string PreviewPath(GameProfile game, ModRecord mod)
     {
         if (!string.IsNullOrWhiteSpace(mod.PreviewImage) && File.Exists(mod.PreviewImage))
@@ -1088,6 +1092,12 @@ public sealed class ModService
         foreach (var relative in EnabledStoredFiles(mod))
         {
             var destRelative = mod.DeployPath(relative);
+            // 旧记录里的根级杂项(封面/说明 txt 等)不再部署到游戏根。
+            if (ModLayoutParser.IsRootJunk(destRelative))
+            {
+                continue;
+            }
+
             var isPakModsTarget = PakModsManager.IsManagedTarget(destRelative);
             if (game.UsesPakPatches &&
                 destRelative.EndsWith(".pak", StringComparison.OrdinalIgnoreCase) &&
@@ -1478,6 +1488,8 @@ public sealed class ModService
     private static ParsedMod ParseUnit(GameProfile game, string sourcePath, string staging, string name)
     {
         var parsed = ModLayoutParser.Parse(game, sourcePath, staging);
+        // 封面、说明 txt 等根级杂项不入库也不部署,游戏根(exe 同级)只保留 pak 与加载 dll。
+        parsed.Files.RemoveAll(file => ModLayoutParser.IsRootJunk(file.RelativeDest));
         if (parsed.Files.Count == 0)
         {
             TryDelete(staging);

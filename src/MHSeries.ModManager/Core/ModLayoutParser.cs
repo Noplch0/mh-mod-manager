@@ -476,6 +476,23 @@ public static class ModLayoutParser
                && !normalized.Contains('/');
     }
 
+    /// <summary>
+    /// 游戏相对路径是否为「会落到游戏根(exe 同级)又不允许落根」的杂项文件——封面图、说明 txt、多余预览图等。
+    /// 豁免:.pak 有专门通道(世界按原文件名放根,崛起/荒野进 pak_mods);加载器/插件 dll 必须在游戏根。
+    /// </summary>
+    public static bool IsRootJunk(string gameRelative)
+    {
+        var path = gameRelative.Replace('\\', '/').Trim('/');
+        if (string.IsNullOrWhiteSpace(path) || path.Contains('/'))
+        {
+            return false;
+        }
+
+        var name = Path.GetFileName(path);
+        return !name.EndsWith(".pak", StringComparison.OrdinalIgnoreCase)
+               && !name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string? FindNestedRoot(GameProfile game, string root)
     {
         foreach (var dir in Directory.GetDirectories(root))

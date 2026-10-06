@@ -76,6 +76,7 @@ dotnet test                                  # 跑全部测试(测试共享真�
 7. **装备改写前提**:`ChangeEquipment` 要求 MOD 处于**禁用状态**;防具改写必须同时改 avp 内容(荒野 `_avp.user.3` 二进制重建,只改文件名不生效)+ 骨骼 lua(`reframework/data/bonesystem/` 等)路径。
 8. **Nexus 文件名解析顺序**:新站内空格格式(`Name <id> <ver> <日期> <密钥>`,`ParseNexusDownloadStem`)**必须先于**旧连字符格式(`ParseNexusStem`,以末尾 9~13 位时间戳为锚从后向前解析),否则日期数字段被误当 id。旧格式版本段可含非数字词(如 `Name-17-REF-1-3-1-时间戳`),数字段前的连续词块并入版本、词块左侧数字段才是 id。`cmg_` 前缀 → caimogu 链接。
 9. **加密压缩包**:导入/更新遇加密包抛 `PasswordRequiredException`(`ArchiveExtractor.Extract` 接受候选密码列表逐个尝试,`IsEncrypted` 不解压即可探测 ZipCrypto/AES/7z/Rar);Host 以 `NeedPassword`+`PasswordFile`+`PendingPaths` 返回,前端弹密码框后把密码累加进请求的 `passwords` 重发(批次从断点续导,同一批自动复用已输密码);**密码只在请求内内存传递、不落盘**。复制/移动模式下导入成功后 `KeepSource` 调 `ArchivePasswordStripper.Strip` 把 downloads 里的存储源重建为**无密码 zip**(SharpCompress 只能写 zip;嵌套加密包递归重建为同名 zip,未加密包字节不动);原位模式(选项 0)不动用户文件,去密码失败静默保留加密副本。
+10. **游戏根零杂项**:游戏根(exe 同级)不允许出现 MOD 的非加载文件——封面图、说明 txt、多余预览图等在解析期丢弃(`ModLayoutParser.IsRootJunk`,`ParseUnit` 过滤),旧记录里的此类条目部署时跳过、禁用时随 `Undeploy` 清除;豁免:世界 pak 按原文件名放根、崛起/荒野 pak 走 pak_mods 通道,加载器/插件 dll(世界任意根 dll、崛起/荒野 GameDlls 白名单)必须在根。
 
 ## 装备改写子系统(Core/Equipment/)
 
@@ -129,3 +130,6 @@ dotnet test                                  # 跑全部测试(测试共享真�
 - 游戏运行时(`CheckGameRunning` 开启且按 exe 名找到进程)拒绝一切切换操作。
 - 导入布局识别 `ModLayoutParser`:World 有 `nativePC/` 用之,`pl|wp|plugins` 映射进 `nativePC/`;崛起/荒野 `natives|reframework` 直接用,`autorun`→`reframework/autorun`、`plugins`→`reframework/plugins`,散装 .lua/.dll 分别归入;`GameDlls` 白名单(dinput8.dll 等 24 个)放游戏根,其他 exe 拒绝;不安全路径在解析期直接抛 InvalidDataException。
 - 测试直接读写真实 `settings.json`(AppPaths 根 = 测试二进制旁 `data`),用随机 appId(9,000,001–9,900,000)隔离但共享同一文件,且全局禁并行——新增测试沿用此模式。
+- 加密压缩包测试夹具在 `tests/MHSeries.ModManager.Tests/Testdata/`(ZipCrypto/AES 加密 zip + 加密 7z,密码 `mhmod123`,内含 `nativePC/hello.bin`),由 csproj 的 `None CopyToOutputDirectory` 拷到输出目录;重新生成用 7z CLI:`7z a -tzip -p<密码> -mem=ZipCrypto|-mem=AES256`(SharpCompress 只能读加密不能写加密)。
+- **git-bash(MSYS)冒烟测试 Host 的坑**:curl 等原生 exe 的 JSON 参数里 `\\` 会被 MSYS 吃成 `\`,请求体变成非法 JSON、端点返回 400,极易误判为后端绑定问题——测试请求里的 Windows 路径一律写正斜杠;前端(Electron fetch + `JSON.stringify`)不受影响。
+- 前端弹窗统一 state 驱动渲染(`renderEquipPicker`/`renderPasswordPrompt`):`.modal-mask` 外壳点按关闭 + `.modal[data-stop]` 内部屏蔽,Esc/回车在全局 keydown 处理;`render()` 整体重建 innerHTML,弹窗输入框要在 render 后显式聚焦。
