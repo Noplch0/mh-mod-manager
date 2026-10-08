@@ -78,6 +78,20 @@ internal static class ApiMapper
         };
     }
 
+    /// <summary>版本号统一显示为 v 前缀;MOD 自带 v/V 前缀(如 v1.1.1)时不重复添加。</summary>
+    private static string FormatVersion(string version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return "未标注版本";
+        }
+
+        var trimmed = version.Trim();
+        return trimmed.Length > 1 && trimmed[0] is 'v' or 'V' && char.IsAsciiDigit(trimmed[1])
+            ? trimmed
+            : $"v{trimmed}";
+    }
+
     private static ModDto MapMod(ModService service, GameProfile game, ModRecord mod, IReadOnlyList<ModGroup> groups)
     {
         var preview = service.PreviewPath(game, mod);
@@ -94,7 +108,7 @@ internal static class ApiMapper
             Id = mod.Id,
             GroupId = mod.GroupId,
             Name = string.IsNullOrWhiteSpace(mod.DisplayName) ? mod.Name : mod.DisplayName,
-            Version = string.IsNullOrWhiteSpace(mod.Version) ? "未标注版本" : $"v{mod.Version}",
+            Version = FormatVersion(mod.Version),
             Author = string.IsNullOrWhiteSpace(mod.Author) ? "未知作者" : mod.Author,
             Category = string.IsNullOrWhiteSpace(mod.Category) ? "其他" : mod.Category,
             Enabled = mod.Enabled,
