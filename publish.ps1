@@ -198,9 +198,3 @@ Write-Host ""
 Write-Host "Done"
 Write-Host "Version : $version"
 Write-Host "Zip     : $zipPath"
-
-# 双击运行时保持窗口打开，便于查看结果。
-if ($Host.Name -eq "ConsoleHost" -and [Environment]::UserInteractive) {
-    Write-Host ""
-    Read-Host "按回车键退出"
-}
