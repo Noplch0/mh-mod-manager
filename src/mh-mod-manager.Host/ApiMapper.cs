@@ -60,7 +60,8 @@ internal static class ApiMapper
     {
         LastGame = settings.LastGame,
         CheckGameRunning = settings.CheckGameRunning,
-        InstallOption = settings.InstallOption
+        InstallOption = settings.InstallOption,
+        NexusApiKey = settings.NexusApiKey
     };
 
     private static GroupDto MapGroup(ModGroup group, IEnumerable<ModRecord> mods)
@@ -113,6 +114,7 @@ internal static class ApiMapper
             Category = string.IsNullOrWhiteSpace(mod.Category) ? "其他" : mod.Category,
             Enabled = mod.Enabled,
             Index = mod.Index,
+            NexusId = mod.NexusId,
             FileCount = mod.Files.Count,
             HasPreview = !string.IsNullOrWhiteSpace(preview),
             PreviewUrl = string.IsNullOrWhiteSpace(preview) ? "" : $"/api/games/{game.Id}/mods/{mod.Id}/preview?t={mod.InstallTime.ToUnixTimeSeconds()}",
@@ -212,6 +214,7 @@ internal sealed class SettingsDto
     public GameId LastGame { get; set; }
     public bool CheckGameRunning { get; set; }
     public int InstallOption { get; set; }
+    public string NexusApiKey { get; set; } = "";
 }
 
 internal sealed class GroupDto
@@ -235,6 +238,7 @@ internal sealed class ModDto
     public string Category { get; set; } = "";
     public bool Enabled { get; set; }
     public int Index { get; set; }
+    public int NexusId { get; set; }
     public int FileCount { get; set; }
     public bool HasPreview { get; set; }
     public string PreviewUrl { get; set; } = "";

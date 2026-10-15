@@ -13,6 +13,7 @@ Console.WriteLine($"mh-mod-manager data: {AppPaths.Root}");
 var settings = new SettingsStore();
 settings.Load();
 var service = new ModService(settings);
+var nexus = new NexusUpdateService(settings, service);
 var gate = new object();
 
 var builder = WebApplication.CreateBuilder(args);
@@ -88,10 +89,84 @@ app.MapPut("/api/settings", (SettingsRequest body) =>
     {
         settings.Current.CheckGameRunning = body.CheckGameRunning;
         settings.Current.InstallOption = body.InstallOption;
+        if (body.NexusApiKey is not null)
+        {
+            settings.Current.NexusApiKey = body.NexusApiKey.Trim();
+        }
+
         settings.Save();
         return Results.Json(ApiMapper.Bootstrap(service, settings));
     }
 });
+
+app.MapPost("/api/nexus/validate", (CancellationToken cancellation) =>
+{
+    lock (gate)
+    {
+        try
+        {
+            var user = nexus.ValidateAsync(cancellation).GetAwaiter().GetResult();
+            return Results.Json(new
+            {
+                error = false,
+                name = user.Name,
+                isPremium = user.IsPremium,
+                isSupporter = user.IsSupporter
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new { error = true, status = ex.Message });
+        }
+    }
+});
+
+app.MapGet("/api/games/{gameId}/mods/{modId}/nexus/update-check", (GameId gameId, int modId) =>
+{
+    lock (gate)
+    {
+        try
+        {
+            var game = GameProfile.Get(gameId);
+            var mod = RequireMod(service, game, modId);
+            var info = nexus.CheckAsync(game, mod, force: false).GetAwaiter().GetResult();
+            return Results.Json(new
+            {
+                error = false,
+                available = info.Available,
+                currentVersion = info.CurrentVersion,
+                latestVersion = info.LatestVersion,
+                latestFileId = info.LatestFileId,
+                latestFileName = info.LatestFileName,
+                latestFileSize = info.LatestFileSize,
+                latestUploadedAt = info.LatestUploadedAt.ToString("yyyy-MM-dd HH:mm"),
+                files = info.Files.Select(file => new
+                {
+                    fileId = file.FileId,
+                    fileName = file.FileName,
+                    version = file.Version,
+                    sizeBytes = file.SizeBytes,
+                    uploadedAt = file.UploadedAt.ToString("yyyy-MM-dd HH:mm"),
+                    categoryId = file.CategoryId,
+                    isPrimary = file.IsPrimary
+                })
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new { error = true, status = ex.Message });
+        }
+    }
+});
+
+app.MapPost("/api/games/{gameId}/mods/{modId}/nexus/download",
+    (GameId gameId, int modId, NexusDownloadRequest body) =>
+    Mutate(gameId, service, settings, gate, game =>
+    {
+        var mod = RequireMod(service, game, modId);
+        var batch = nexus.DownloadAndUpdateAsync(game, mod, body.FileId, body.Passwords).GetAwaiter().GetResult();
+        return $"已通过 Nexus 更新 {batch.Mods[0].DisplayName}";
+    }));
 
 app.MapPost("/api/games/{gameId}/refresh", (GameId gameId) =>
 {
@@ -477,7 +552,9 @@ static string ResolveDataRoot(string[] args)
 }
 
 internal sealed record PathRequest(string? Path);
-internal sealed record SettingsRequest(bool CheckGameRunning, int InstallOption);
+internal sealed record SettingsRequest(bool CheckGameRunning, int InstallOption, string? NexusApiKey = null);
+
+internal sealed record NexusDownloadRequest(long FileId, List<string>? Passwords = null);
 
 internal static class LegacyDataCleanup
 {

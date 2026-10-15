@@ -33,7 +33,8 @@ desktop/                     Electron 37 + Vite + 原生 JS(无前端框架)
 
 ```
 src/MHSeries.ModManager/Core/            业务核心(ModService、ModLayoutParser、NexusNames、
-                                         ArchivePasswordStripper、PakModsManager、ModRepository、BundleMigration…)
+                                         ArchivePasswordStripper、NexusApiClient/NexusUpdateService、
+                                         PakModsManager、ModRepository、BundleMigration…)
 src/MHSeries.ModManager/Core/Equipment/  装备改写子系统
 src/MHSeries.ModManager/Models/          纯数据模型
 src/MHSeries.ModManager/Data/Equipment/  嵌入资源:装备 CSV、文件清单 .txt.gz、avp 模板 .bin
@@ -74,9 +75,10 @@ dotnet test                                  # 跑全部测试(测试共享真�
 5. **组件化 MOD**:多组件压缩包(多个顶层目录/嵌套压缩包/散装 pak,候选 ≥2)导入为一个 MOD,组件存储为 `files\c{n}\...`,封面 `covers\c{n}.<ext>`;组件顺序按名称字母排序确定。`c{n}/` 前缀贯穿全链(存储、部署剥前缀、装备改写按组件目录、迁移)。单 pak / 单包不组件化。
 6. **旧同源分组自动迁移**(`BundleMigration`):非默认组内 `SourceFile` 同名且文件大小一致的成员合并为组件化 MOD;手动分组不受影响。
 7. **装备改写前提**:`ChangeEquipment` 要求 MOD 处于**禁用状态**;防具改写必须同时改 avp 内容(荒野 `_avp.user.3` 二进制重建,只改文件名不生效)+ 骨骼 lua(`reframework/data/bonesystem/` 等)路径。
-8. **Nexus 文件名解析顺序**:新站内空格格式(`Name <id> <ver> <日期> <密钥>`,`ParseNexusDownloadStem`)**必须先于**旧连字符格式(`ParseNexusStem`,以末尾 9~13 位时间戳为锚从后向前解析),否则日期数字段被误当 id。旧格式版本段可含非数字词(如 `Name-17-REF-1-3-1-时间戳`),数字段前的连续词块并入版本、词块左侧数字段才是 id。`cmg_` 前缀 → caimogu 链接。
+8. **Nexus 文件名解析顺序**:新站内空格格式(`Name <id> <ver> <日期> <密钥>`,`ParseNexusDownloadStem`)**必须先于**旧连字符格式(`ParseNexusStem`,以末尾 9~13 位时间戳为锚从后向前解析),否则日期数字段被误当 id。旧格式版本段可含非数字词(如 `Name-17-REF-1-3-1-时间戳`),数字段前的连续词块并入版本、词块左侧数字段才是 id。`cmg_` 前缀 → caimogu 链接。**文件名里解析出的版本优先于 modinfo.ini/ModuleConfig 声明的版本**(文件名反映实际下载的文件;文件名无版本段时不覆盖)。
 9. **加密压缩包**:导入/更新遇加密包抛 `PasswordRequiredException`(`ArchiveExtractor.Extract` 接受候选密码列表逐个尝试,`IsEncrypted` 不解压即可探测 ZipCrypto/AES/7z/Rar);Host 以 `NeedPassword`+`PasswordFile`+`PendingPaths` 返回,前端弹密码框后把密码累加进请求的 `passwords` 重发(批次从断点续导,同一批自动复用已输密码);**密码只在请求内内存传递、不落盘**。复制/移动模式下导入成功后 `KeepSource` 调 `ArchivePasswordStripper.Strip` 把 downloads 里的存储源重建为**无密码 zip**(SharpCompress 只能写 zip;嵌套加密包递归重建为同名 zip,未加密包字节不动);原位模式(选项 0)不动用户文件,去密码失败静默保留加密副本。
 10. **游戏根零杂项**:游戏根(exe 同级)不允许出现 MOD 的非加载文件——封面图、说明 txt、多余预览图等在解析期丢弃(`ModLayoutParser.IsRootJunk`,`ParseUnit` 过滤),旧记录里的此类条目部署时跳过、禁用时随 `Undeploy` 清除;豁免:世界 pak 按原文件名放根、崛起/荒野 pak 走 pak_mods 通道,加载器/插件 dll(世界任意根 dll、崛起/荒野 GameDlls 白名单)必须在根。
+11. **Nexus API 集成**(`NexusApiClient`/`NexusUpdateService`/`NexusUpdateLogic`):API Key 明文存 `settings.json`(`AppSettings.NexusApiKey`),请求带 `apikey` 头 + 描述性 UA;**`download_link.json` 生成直链是 Premium 专属**,免费 key 403 → 中文提示并引导 N 网页手动下载(外链白名单已放行);文件列表按 (GameId, NexusId) 内存缓存 TTL 10 分钟;下载落 `downloads/` 且已存在不重复下载(密码重试路径复用);下载后直接走 `ModService.Update` 原地更新;更新判定 = 版本归一化比较(剥 v 前缀、数字段补零)+ 重新上传时间兜底。HTTP 经 `INexusApi` 接口注入,测试用假实现离线跑。
 
 ## 装备改写子系统(Core/Equipment/)
 
@@ -92,7 +94,7 @@ dotnet test                                  # 跑全部测试(测试共享真�
 
 - `ModRecord`(`mods/<id>/info.json`):Id(从 1001 起)、GroupId、NexusId、Name/DisplayName、Enabled、Index、Version、Author、Category、SourceFile、HomeUrl、PreviewImage、`Files`(存储相对路径,bundle 带 `c{n}/` 前缀)、`OverwriteFiles`(pak_mods 路径映射,OrdinalIgnoreCase)、`Components`(`IsBundle` = Components.Count>0,不落盘)。`DeployPath(stored)` 是存储路径→游戏路径的唯一函数。
 - `ModGroup`(`games/<appId>/groups.json`):默认组"未分组",孤儿 MOD 归入;Index 重排为 1..N 连续。
-- `AppSettings`(`settings.json`):LastGame(默认 Wilds)、CheckGameRunning(默认 true)、InstallOption(0 原位/1 复制到 downloads/2 移动)、GamePaths 按 SteamAppId 键。
+- `AppSettings`(`settings.json`):LastGame(默认 Wilds)、CheckGameRunning(默认 true)、InstallOption(0 原位/1 复制到 downloads/2 移动)、NexusApiKey(明文)、GamePaths 按 SteamAppId 键。
 - `JsonUtil.Load` **捕获所有异常返回 fallback——损坏的 JSON 会被静默重置**,改动需谨慎。
 - 预览图:stem 为 screenshot/preview/cover* 且在 files 根的文件不算部署文件;MOD 封面统一存 `files\screenshot.<ext>`。
 - 游戏目录定位 `SteamLocator`:注册表卸载项 → Steam 库 VDF 枚举;有效性 = 目录存在且 `<dir>\<ExeName>` 存在。
@@ -112,6 +114,8 @@ dotnet test                                  # 跑全部测试(测试共享真�
 | POST `/api/games/{g}/clean` | 清理当前启用的部署文件 |
 | POST `/api/games/{g}/launch` | `steam://run/<appId>` |
 | GET `.../mods/{m}/preview?component=` / `.../mods/{m}/folder` / GET `.../equipment?kind=` | 图片流 / 目录路径 / 装备列表(较慢,会展开 pak) |
+| GET `.../games/{g}/game-running` / POST `/api/nexus/validate` | 更新前游戏运行预检 / 验证 Nexus Key(返回账户与 Premium 状态) |
+| GET `.../mods/{m}/nexus/update-check` / POST `.../nexus/download` | Nexus 更新检查(带文件列表,内存缓存) / 下载并原地更新(403=需 Premium) |
 
 ## 清理红线(执行清理任务前必读)
 

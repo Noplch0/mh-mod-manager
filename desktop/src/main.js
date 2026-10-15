@@ -18,7 +18,10 @@ const state = {
   bundleOpenId: null,
   equipPicker: null,
   equipCatalog: { kind: "", items: [], loading: false },
-  passwordPrompt: null
+  passwordPrompt: null,
+  nexusUpdates: {},
+  nexusFiles: null,
+  nexusAccount: ""
 };
 
 const app = document.querySelector("#app");
@@ -72,6 +75,9 @@ function applyWorkspace(data, status) {
   }
   const ids = new Set(state.mods.map(mod => mod.id));
   state.selectedIds = new Set([...state.selectedIds].filter(id => ids.has(id)));
+  for (const id of Object.keys(state.nexusUpdates)) {
+    if (!ids.has(Number(id))) delete state.nexusUpdates[id];
+  }
   if (state.bundleOpenId != null && !ids.has(state.bundleOpenId)) {
     state.bundleOpenId = null;
   }
@@ -249,6 +255,206 @@ function submitPassword() {
   closePasswordPrompt(value || null);
 }
 
+// Nexus 更新:检查结果内联区、文件选择弹窗、验证/检查/下载动作。
+// 未设置 API Key 时禁止一切 Nexus 相关请求(检查/验证/下载),只给出配置提示。
+function nexusKeyMissing() {
+  const key = state.settings.nexusApiKey ?? "";
+  if (key.trim().length > 0) return false;
+  state.status = "请先在设置中配置 Nexus API Key";
+  state.statusError = true;
+  render();
+  return true;
+}
+
+function fmtSize(bytes) {
+  if (!bytes || bytes <= 0) return "?";
+  const mb = bytes / 1048576;
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
+}
+
+function renderNexusUpdate(mod) {
+  const info = state.nexusUpdates[mod.id];
+  return `
+    <div class="field">
+      <span>Nexus 更新</span>
+      ${info ? (info.available
+        ? `<div class="upd-found">发现新版本 ${esc(info.latestVersion || "?")}</div>
+           <div class="muted" style="font-size:12px;margin-top:4px">${esc(info.latestFileName)} · ${fmtSize(info.latestFileSize)} · ${esc(info.latestUploadedAt)}</div>`
+        : '<div class="muted">已是最新版本</div>')
+        : `<div class="muted">${(state.settings.nexusApiKey ?? "").trim() ? "未检查" : "未配置 API Key"}</div>`}
+      <div class="actions" style="margin-top:8px">
+        <button class="btn" data-action="check-nexus-update" data-id="${mod.id}" ${state.busy ? "disabled" : ""}>⟳ 检查更新</button>
+        ${info && info.files && info.files.length ? `<button class="btn" data-action="open-nexus-files" data-id="${mod.id}" ${state.busy ? "disabled" : ""}>选择文件下载</button>` : ""}
+      </div>
+    </div>`;
+}
+
+function renderNexusFiles() {
+  const picker = state.nexusFiles;
+  if (!picker) return "";
+  return `
+    <div class="modal-mask" data-action="close-nexus-files">
+      <div class="modal" data-stop="true">
+        <div class="eyebrow">NEXUS FILES</div>
+        <h2 class="h1" style="font-size:18px;margin:8px 0 12px">选择要下载的文件</h2>
+        <div class="equip-options">
+          ${picker.files.map(file => `
+            <button class="equip-option${file.fileId === picker.selectedFileId ? " active" : ""}" data-action="pick-nexus-file" data-id="${file.fileId}">
+              <span>${esc(file.fileName)}</span>
+              <span class="muted">${esc(file.version || "?")} · ${fmtSize(file.sizeBytes)} · ${esc(file.uploadedAt)}${file.categoryId === 1 || file.isPrimary ? " · 主文件" : ""}</span>
+            </button>`).join("") || '<div class="empty">没有可用文件</div>'}
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:8px">API 下载需要 Nexus Premium;免费账户请在 N 网页面手动下载后使用「更新 MOD」。</div>
+        <div class="actions" style="margin-top:12px">
+          <button class="btn" data-action="close-nexus-files">取消</button>
+          <button class="primary" data-action="apply-nexus-download" ${state.busy ? "disabled" : ""}>下载并更新</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function checkNexusUpdate(modId) {
+  if (state.busy || !state.game || nexusKeyMissing()) return;
+  state.busy = true;
+  try {
+    const data = await request(`/api/games/${state.game.id}/mods/${modId}/nexus/update-check`);
+    if (data.error) {
+      state.status = data.status;
+      state.statusError = true;
+    } else {
+      state.nexusUpdates[modId] = data;
+      state.status = data.available ? `发现新版本 ${data.latestVersion || "?"}` : "已是最新版本";
+      state.statusError = false;
+    }
+  } catch (error) {
+    state.status = error.message || "检查更新失败";
+    state.statusError = true;
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+async function checkAllNexusUpdates() {
+  if (state.busy || !state.game || nexusKeyMissing()) return;
+  const targets = state.mods.filter(mod => mod.nexusId > 0);
+  if (targets.length === 0) {
+    state.status = "没有可检查的 MOD（需从 Nexus 文件名识别来源）";
+    state.statusError = false;
+    render();
+    return;
+  }
+
+  state.busy = true;
+  let available = 0;
+  let lastError = "";
+  try {
+    for (let i = 0; i < targets.length; i++) {
+      state.status = `正在检查更新 (${i + 1}/${targets.length})...`;
+      render();
+      try {
+        const data = await request(`/api/games/${state.game.id}/mods/${targets[i].id}/nexus/update-check`);
+        if (data.error) {
+          lastError = `${targets[i].name}: ${data.status}`;
+        } else {
+          state.nexusUpdates[targets[i].id] = data;
+          if (data.available) available++;
+        }
+      } catch (error) {
+        lastError = `${targets[i].name}: ${error.message || "失败"}`;
+      }
+    }
+    state.status = lastError
+      ? `${available} 个 MOD 有更新。${lastError}`
+      : `${available} 个 MOD 有更新`;
+    state.statusError = Boolean(lastError);
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+async function applyNexusDownload() {
+  const picker = state.nexusFiles;
+  if (!picker || state.busy || !state.game || nexusKeyMissing()) return;
+  const label = picker.files.find(file => file.fileId === picker.selectedFileId)?.fileName ?? "Nexus 文件";
+  state.nexusFiles = null;
+  state.busy = true;
+  const passwords = [];
+  try {
+    while (true) {
+      state.status = `正在通过 Nexus 下载更新...`;
+      state.statusError = false;
+      render();
+      const data = await request(`/api/games/${state.game.id}/mods/${picker.modId}/nexus/download`, {
+        method: "POST",
+        body: JSON.stringify({ fileId: picker.selectedFileId, passwords })
+      });
+      applyWorkspace(data);
+      if (!data.needPassword) {
+        if (!data.error) {
+          await refreshNexusUpdate(picker.modId);
+        }
+        break;
+      }
+      const password = await promptPassword(label, data.status);
+      if (password == null) {
+        state.status = "已取消下载";
+        state.statusError = true;
+        break;
+      }
+      passwords.push(password);
+    }
+  } catch (error) {
+    state.status = error.message || "下载失败";
+    state.statusError = true;
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+async function validateNexusKey() {
+  if (state.busy) return;
+  const input = app.querySelector('[data-role="nexus-key"]');
+  const nexusApiKey = input ? input.value.trim() : (state.settings.nexusApiKey ?? "");
+  if (nexusApiKey.length === 0) {
+    state.nexusAccount = "请先填写 Nexus API Key";
+    state.status = "请先填写 Nexus API Key";
+    state.statusError = true;
+    render();
+    return;
+  }
+  state.busy = true;
+  try {
+    await request("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        checkGameRunning: state.settings.checkGameRunning,
+        installOption: state.settings.installOption,
+        nexusApiKey
+      })
+    });
+    state.settings.nexusApiKey = nexusApiKey;
+    const data = await request("/api/nexus/validate", { method: "POST" });
+    if (data.error) {
+      state.nexusAccount = data.status;
+      state.status = data.status;
+      state.statusError = true;
+    } else {
+      state.nexusAccount = `Nexus 账户: ${data.name}（${data.isPremium ? "Premium" : "免费"}）`;
+      state.status = state.nexusAccount;
+      state.statusError = false;
+    }
+  } catch (error) {
+    state.status = error.message || "验证失败";
+    state.statusError = true;
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
 function switchClass(on) {
   return `switch${on ? " on" : ""}`;
 }
@@ -346,8 +552,9 @@ function render() {
             <select id="move-target">
               ${state.groups.map(group => `<option value="${group.id}" ${group.id === state.moveTarget ? "selected" : ""}>${esc(group.name)}</option>`).join("")}
             </select>
-            <button class="primary" data-action="move-selected" ${state.busy || selected.length === 0 ? "disabled" : ""}>批量移动</button>
-            <button class="primary" data-action="import" ${state.busy ? "disabled" : ""}>添加mod</button>
+              <button class="primary" data-action="move-selected" ${state.busy || selected.length === 0 ? "disabled" : ""}>批量移动</button>
+              <button class="btn" data-action="check-all-updates" ${state.busy ? "disabled" : ""}>检查更新</button>
+              <button class="primary" data-action="import" ${state.busy ? "disabled" : ""}>添加mod</button>
           </div>
           <div class="list">
             ${visibleGroups().map(group => {
@@ -381,6 +588,7 @@ function render() {
                       <div class="meta">
                         <input class="name" data-role="mod-name" data-id="${mod.id}" value="${esc(state.modRenameDrafts[mod.id] ?? mod.name)}" />
                         <div class="sub">
+                          ${state.nexusUpdates[mod.id]?.available ? '<span class="upd-badge">有更新</span>' : ""}
                           <span class="muted">${esc(mod.version)}</span>
                           <span class="muted">${mod.fileCount} 个文件</span>
                           <select data-role="mod-group" data-id="${mod.id}">
@@ -422,6 +630,14 @@ function render() {
                 <option value="2" ${state.settings.installOption === 2 ? "selected" : ""}>移动到工作区</option>
               </select>
             </div>
+            <div class="field">
+              <span>Nexus API Key</span>
+              <input data-role="nexus-key" type="password" placeholder="在 nexusmods.com 个人设置里生成" value="${esc(state.settings.nexusApiKey ?? "")}" autocomplete="off" spellcheck="false" style="width:100%;box-sizing:border-box" />
+              <div class="actions" style="margin-top:8px">
+                <button class="btn" data-action="validate-nexus-key" ${state.busy ? "disabled" : ""}>验证 Key</button>
+              </div>
+              <div class="muted" style="font-size:12px">${esc(state.nexusAccount ?? "用于检查 MOD 更新与下载更新（下载需 Premium）")}</div>
+            </div>
           ` : pane === "mod" && active ? `
             <div class="eyebrow">MOD PREVIEW</div>
             <h2 class="h1" style="font-size:21px;margin:8px 0 0">${esc(active.name)}</h2>
@@ -439,6 +655,7 @@ function render() {
                ${renderEquipment(active)}
                 ${active.enabled ? '<div class="muted">禁用 MOD 后可修改对应套装</div>' : '<div class="muted">将文件重定向到另一套游戏内装备，与原版盒子一致</div>'}
              </div>
+             ${active.nexusId > 0 ? renderNexusUpdate(active) : ""}
              <div class="actions mod-tools">
                <button class="primary" data-action="update-mod" data-id="${active.id}" ${state.busy ? "disabled" : ""}>↻ 更新 MOD</button>
                <button class="btn" data-action="open-mod-folder" data-id="${active.id}" ${state.busy ? "disabled" : ""}>▣ 查看文件</button>
@@ -457,6 +674,7 @@ function render() {
       <div class="dropmask" id="dropmask"><div class="dropcard">松开以批量导入 MOD</div></div>
       ${renderEquipPicker()}
       ${renderPasswordPrompt()}
+      ${renderNexusFiles()}
     </div>
   `;
   const nextList = app.querySelector(".list");
@@ -686,6 +904,47 @@ function onClick(event) {
     submitPassword();
     return;
   }
+  if (action === "validate-nexus-key") {
+    validateNexusKey();
+    return;
+  }
+  if (action === "check-nexus-update") {
+    checkNexusUpdate(Number(target.dataset.id));
+    return;
+  }
+  if (action === "check-all-updates") {
+    checkAllNexusUpdates();
+    return;
+  }
+  if (action === "open-nexus-files") {
+    const info = state.nexusUpdates[Number(target.dataset.id)];
+    if (info?.files?.length) {
+      state.nexusFiles = {
+        modId: Number(target.dataset.id),
+        files: info.files,
+        selectedFileId: info.latestFileId || info.files[0].fileId
+      };
+      render();
+    }
+    return;
+  }
+  if (action === "pick-nexus-file") {
+    if (state.nexusFiles) {
+      state.nexusFiles.selectedFileId = Number(target.dataset.id);
+      render();
+    }
+    return;
+  }
+  if (action === "close-nexus-files") {
+    if (target.classList.contains("modal-mask") && event.target.closest("[data-stop]")) return;
+    state.nexusFiles = null;
+    render();
+    return;
+  }
+  if (action === "apply-nexus-download") {
+    applyNexusDownload();
+    return;
+  }
   if (action === "apply-equip") {
     applyEquipChange();
   }
@@ -746,7 +1005,7 @@ function onChange(event) {
     }));
     return;
   }
-  if (target.dataset.role === "setting" || target.dataset.role === "install-option") {
+  if (target.dataset.role === "setting" || target.dataset.role === "install-option" || target.dataset.role === "nexus-key") {
     saveSettings();
     return;
   }
@@ -763,11 +1022,14 @@ function onChange(event) {
 async function saveSettings() {
   const checkGameRunning = app.querySelector('[data-key="checkGameRunning"]')?.checked ?? state.settings.checkGameRunning;
   const installOption = Number(app.querySelector("[data-role='install-option']")?.value ?? state.settings.installOption);
+  const keyInput = app.querySelector("[data-role='nexus-key']");
+  const nexusApiKey = keyInput ? keyInput.value.trim() : (state.settings.nexusApiKey ?? "");
   await run(async () => {
     const data = await request("/api/settings", {
       method: "PUT",
-      body: JSON.stringify({ checkGameRunning, installOption })
+      body: JSON.stringify({ checkGameRunning, installOption, nexusApiKey })
     });
+    state.settings.nexusApiKey = nexusApiKey;
     applyWorkspace(data.workspace, "设置已保存");
     return data.workspace;
   });
@@ -808,6 +1070,21 @@ async function applyEquipChange() {
   }, "修改装备失败");
 }
 
+// 更新成功后立即复查一次(仅对已有检查结果的 MOD):服务端文件列表有缓存,通常不消耗 API 次数。
+async function refreshNexusUpdate(modId) {
+  // 更新后的自动复查:未配置 Key 时静默跳过,不打断更新流程。
+  const key = state.settings.nexusApiKey ?? "";
+  if (!key.trim() || !state.nexusUpdates[modId] || !state.game) return;
+  try {
+    const data = await request(`/api/games/${state.game.id}/mods/${modId}/nexus/update-check`);
+    if (!data.error) {
+      state.nexusUpdates[modId] = data;
+    }
+  } catch {
+    // 复查失败保留旧结果,可手动再检查
+  }
+}
+
 async function updateMod(id) {
   if (state.busy || !state.game) return;
   state.busy = true;
@@ -823,6 +1100,7 @@ async function updateMod(id) {
     const path = window.mhModManager?.pickUpdate ? await window.mhModManager.pickUpdate() : "";
     if (!path) return;
     const passwords = [];
+    let updated = false;
     while (true) {
       state.status = "正在更新 MOD...";
       state.statusError = false;
@@ -832,7 +1110,10 @@ async function updateMod(id) {
         body: JSON.stringify({ paths: [path], passwords })
       });
       applyWorkspace(data);
-      if (!data.needPassword) break;
+      if (!data.needPassword) {
+        updated = !data.error;
+        break;
+      }
       const password = await promptPassword(path, data.status);
       if (password == null) {
         state.status = "已取消更新：压缩包需要密码";
@@ -840,6 +1121,10 @@ async function updateMod(id) {
         break;
       }
       passwords.push(password);
+    }
+
+    if (updated) {
+      await refreshNexusUpdate(id);
     }
   } catch (error) {
     state.status = error.message || "更新失败";
@@ -1020,6 +1305,10 @@ async function start() {
       }
       if (state.equipPicker) {
         state.equipPicker = null;
+        render();
+      }
+      if (state.nexusFiles) {
+        state.nexusFiles = null;
         render();
       }
     }
