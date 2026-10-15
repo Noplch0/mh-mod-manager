@@ -107,6 +107,39 @@ public sealed class NexusNamesTests
         Assert.Equal("REF.1.3.1", mod.Version);
     }
 
+    [Fact]
+    public void FilenameVersionOverridesModinfoVersion()
+    {
+        // 文件名里的版本反映实际下载的文件,modinfo.ini 写旧了也要以文件名为准。
+        var legacy = new ParsedMod
+        {
+            Name = "Better Camera Distance",
+            Version = "1.0",
+            SourceFile = "Better Camera Distance-431-3-6-1744821203.zip"
+        };
+        NexusNames.Apply(legacy, legacy.SourceFile);
+        Assert.Equal("3.6", legacy.Version);
+
+        var current = new ParsedMod
+        {
+            Name = "Artian Editor",
+            Version = "2.0",
+            SourceFile = "Artian Editor 196 2.3.0 2026-08-21T16-39Z 5XmKs3RLH.7z"
+        };
+        NexusNames.Apply(current, current.SourceFile);
+        Assert.Equal("2.3.0", current.Version);
+
+        // 文件名解析不出版本(如无版本段)时不覆盖 modinfo 的值。
+        var noVersion = new ParsedMod
+        {
+            Name = "Some Mod",
+            Version = "1.0",
+            SourceFile = "Some Mod-42-1767490208.zip"
+        };
+        NexusNames.Apply(noVersion, noVersion.SourceFile);
+        Assert.Equal("1.0", noVersion.Version);
+    }
+
     [Theory]
     [InlineData(GameId.World, "monsterhunterworld")]
     [InlineData(GameId.Rise, "monsterhunterrise")]

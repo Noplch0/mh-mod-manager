@@ -54,7 +54,8 @@ public static class NexusNames
             mod.Name = info.Value.Name;
         }
 
-        if (string.IsNullOrWhiteSpace(mod.Version))
+        // 文件名里的版本反映实际下载的文件,优先于 modinfo.ini/ModuleConfig 声明的版本。
+        if (!string.IsNullOrWhiteSpace(info.Value.Version))
         {
             mod.Version = info.Value.Version;
         }
