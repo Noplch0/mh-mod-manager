@@ -32,7 +32,8 @@ internal static class PakReader
         return result;
     }
 
-    public static int RewritePaths(string pakPath, PakFileIndex index, Func<string, string?> map, Func<string, byte[]?>? contentPatch = null)
+    public static int RewritePaths(string pakPath, PakFileIndex index, Func<string, string?> map,
+        Func<string, byte[]?>? contentPatch = null, bool requireContentPatch = false)
     {
         if (!TryOpenTable(pakPath, out var table))
         {
@@ -43,6 +44,8 @@ internal static class PakReader
         {
             var changed = 0;
             var pending = new List<(int Entry, byte[] Payload)>();
+            var occupied = table.Hashes().GroupBy(hash => hash).ToDictionary(group => group.Key, group => group.Count());
+            var targets = new Dictionary<ulong, string>();
             for (var i = 0; i < table.TotalFiles; i++)
             {
                 var hash = table.ReadHash(i);
@@ -54,11 +57,13 @@ internal static class PakReader
 
                 var normalized = raw.Replace('\\', '/');
                 var entryChanged = false;
-                if (contentPatch is not null && table.SupportsContentPatch)
+                if (contentPatch is not null && (table.SupportsContentPatch || requireContentPatch))
                 {
                     var payload = contentPatch(normalized);
                     if (payload is not null)
                     {
+                        if (!table.SupportsContentPatch)
+                            throw new InvalidOperationException("此 PAK 格式不支持改写 AVP 内容，未修改 MOD 文件。");
                         pending.Add((i, payload));
                         entryChanged = true;
                     }
@@ -75,6 +80,9 @@ internal static class PakReader
                     var newHash = PakHash.PathHash(next);
                     if (newHash != hash)
                     {
+                        occupied[hash]--;
+                        occupied[newHash] = occupied.GetValueOrDefault(newHash) + 1;
+                        targets.TryAdd(newHash, next);
                         table.WriteHash(i, newHash);
                         entryChanged = true;
                     }
@@ -85,6 +93,9 @@ internal static class PakReader
                     changed++;
                 }
             }
+
+            var conflicts = targets.Where(pair => occupied[pair.Key] > 1).Select(pair => pair.Value).ToList();
+            if (conflicts.Count > 0) throw new EquipmentConflictException(conflicts);
 
             if (pending.Count > 0)
             {
@@ -118,11 +129,19 @@ internal static class PakReader
         }
     }
 
-    private static bool TryOpenTable(string pakPath, out PakTable table)
+    public static bool CanInspect(string path) => new FileInfo(path) is { Exists: true, Length: > 16 and <= MaxPakSize };
+
+    public static ulong[] ListHashes(string path)
+    {
+        if (!TryOpenTable(path, out var table, limitPakSize: false)) return [];
+        using (table) return table.Hashes().ToArray();
+    }
+
+    private static bool TryOpenTable(string pakPath, out PakTable table, bool limitPakSize = true)
     {
         table = null!;
         var info = new FileInfo(pakPath);
-        if (!info.Exists || info.Length <= 16 || info.Length > MaxPakSize)
+        if (!info.Exists || info.Length <= 16 || (limitPakSize && info.Length > MaxPakSize))
         {
             return false;
         }

@@ -81,8 +81,10 @@ public sealed class NexusUpdateService
         var file = files.FirstOrDefault(item => item.FileId == fileId)
             ?? throw new InvalidOperationException("Nexus 文件不存在，请重新检查更新");
 
-        AppPaths.EnsureCreated();
-        var dest = Path.Combine(AppPaths.DownloadDir, NexusUpdateLogic.SafeFileName(file.FileName));
+        // 下载到该 MOD 独占的目录，与 KeepSource 的存储位置一致（再次更新时可直接复用）。
+        var dir = AppPaths.ModDownloadDir(game.SteamAppId, mod.Id);
+        Directory.CreateDirectory(dir);
+        var dest = Path.Combine(dir, NexusUpdateLogic.SafeFileName(file.FileName));
         if (!File.Exists(dest))
         {
             var url = await _api.GetDownloadLinkAsync(key, game.NexusSlug, mod.NexusId, fileId, cancellation);

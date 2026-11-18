@@ -1,5 +1,7 @@
+import { applyAppearance, defaultAppearance, readBackgroundImage, renderAppearance } from "./appearance.js";
+
 const state = {
-  api: "http://127.0.0.1:17865",
+  api: (import.meta.env.DEV && import.meta.env.VITE_MH_MOD_MANAGER_API) || "http://127.0.0.1:17865",
   games: [],
   settings: { lastGame: "Wilds", checkGameRunning: true, installOption: 0 },
   game: null,
@@ -9,19 +11,25 @@ const state = {
   statusError: false,
   busy: false,
   search: "",
-  selectedIds: new Set(),
   activeId: null,
+  activeComponentId: null,
   pane: "info",
-  moveTarget: 0,
+  gameSettingsId: null,
+  contextMenu: null,
+  deploymentConflicts: null,
+  conflictDialog: null,
+  deletePrompt: null,
   renameDrafts: {},
   modRenameDrafts: {},
   bundleOpenId: null,
   equipPicker: null,
   equipCatalog: { kind: "", items: [], loading: false },
   passwordPrompt: null,
+  sourcePrompt: null,
   nexusUpdates: {},
   nexusFiles: null,
-  nexusAccount: ""
+  nexusAccess: null,
+  nexusKeyDraft: null
 };
 
 const app = document.querySelector("#app");
@@ -29,10 +37,20 @@ const app = document.querySelector("#app");
 import worldIcon from "./assets/icons/world.png";
 import riseIcon from "./assets/icons/rise.png";
 import wildsIcon from "./assets/icons/wilds.png";
+import iconPlus from "lucide-static/icons/plus.svg?raw";
+import iconRefresh from "lucide-static/icons/refresh-cw.svg?raw";
+import iconFolderPlus from "lucide-static/icons/folder-plus.svg?raw";
+import iconArrowUp from "lucide-static/icons/arrow-up.svg?raw";
+import iconDownload from "lucide-static/icons/download.svg?raw";
+import iconFolder from "lucide-static/icons/folder.svg?raw";
+import iconLink from "lucide-static/icons/link.svg?raw";
+import iconTrash from "lucide-static/icons/trash-2.svg?raw";
+import iconSearch from "lucide-static/icons/search.svg?raw";
+import iconGear from "lucide-static/icons/settings.svg?raw";
+import iconPlay from "lucide-static/icons/play.svg?raw";
+import iconMenu from "lucide-static/icons/ellipsis.svg?raw";
 const gameIcons = { World: worldIcon, Rise: riseIcon, Wilds: wildsIcon };
 
-const iconGear = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Zm7.4-2.6.1-.9-.1-.9 1.9-1.5-1.8-3.2-2.3.8a7 7 0 0 0-1.6-.9L15.2 3h-3.7l-.4 2.3c-.6.2-1.1.5-1.6.9l-2.3-.9-1.8 3.2 1.9 1.5-.1.9.1.9-1.9 1.5 1.8 3.2 2.3-.8c.5.4 1 .7 1.6.9l.4 2.3h3.7l.4-2.3c.6-.2 1.1-.5 1.6-.9l2.3.8 1.8-3.2-1.9-1.5Z"/></svg>`;
-const iconPlay = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg>`;
 const iconMinimize = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>`;
 const iconMaximize = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>`;
 const iconClose = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>`;
@@ -54,27 +72,46 @@ async function request(path, options = {}) {
 
 function applyWorkspace(data, status) {
   const nextGameId = data.game?.id;
-  const gameChanged = Boolean(nextGameId && state.game?.id && nextGameId !== state.game.id);
+  const sameGame = nextGameId != null && nextGameId === state.game?.id;
+  const gameChanged = Boolean(nextGameId && state.game?.id && !sameGame);
   if (data.game) state.game = data.game;
-  if (data.settings) state.settings = data.settings;
+  if (data.settings) {
+    if (state.settings.nexusApiKey !== data.settings.nexusApiKey) {
+      state.nexusAccess = null;
+      state.nexusUpdates = {};
+      state.nexusFiles = null;
+    }
+    state.settings = data.settings;
+  }
   if (data.groups) state.groups = data.groups;
   if (data.mods) state.mods = data.mods;
   if (data.games) state.games = data.games;
+  if (data.game) state.games = state.games.map(game => game.id === data.game.id ? data.game : game);
+  if (Array.isArray(data.deploymentConflicts)) {
+    // Bootstrap and game switches establish a baseline, not a warning.
+    if (sameGame && state.deploymentConflicts && !data.error) {
+      const key = item => `${item.winnerId}:${item.overwrittenId}`;
+      const old = new Set(state.deploymentConflicts.map(key));
+      const added = data.deploymentConflicts.filter(item => !old.has(key(item)));
+      if (added.length) state.conflictDialog = { deployment: added };
+    }
+    state.deploymentConflicts = data.deploymentConflicts;
+  }
+  if (data.equipmentConflicts?.length) state.conflictDialog = { equipment: true, name: activeMod()?.name };
   state.status = status ?? data.status ?? state.status;
   // 覆盖式消息(如"设置已保存")视为正常;否则跟随后端的 Error 标记决定警告色。
   state.statusError = status != null ? false : Boolean(data.error);
   if (gameChanged) {
+    state.nexusUpdates = {};
+    state.nexusFiles = null;
     state.renameDrafts = {};
     state.modRenameDrafts = {};
-    state.selectedIds = new Set();
     state.activeId = null;
+    state.activeComponentId = null;
+    state.bundleOpenId = null;
     if (state.pane === "mod") state.pane = "info";
   }
-  if (!state.groups.some(group => group.id === state.moveTarget)) {
-    state.moveTarget = state.groups[0]?.id ?? 0;
-  }
   const ids = new Set(state.mods.map(mod => mod.id));
-  state.selectedIds = new Set([...state.selectedIds].filter(id => ids.has(id)));
   for (const id of Object.keys(state.nexusUpdates)) {
     if (!ids.has(Number(id))) delete state.nexusUpdates[id];
   }
@@ -85,6 +122,7 @@ function applyWorkspace(data, status) {
     state.activeId = null;
     if (state.pane === "mod") state.pane = "info";
   }
+  if (!activeMod()?.components?.some(item => item.id === state.activeComponentId)) state.activeComponentId = null;
   for (const id of Object.keys(state.renameDrafts)) {
     const group = state.groups.find(item => item.id === Number(id));
     if (!group || group.name === state.renameDrafts[id]) {
@@ -125,17 +163,15 @@ async function run(task, fallback = "操作失败") {
   }
 }
 
-function selectedMods() {
-  return state.mods.filter(mod => state.selectedIds.has(mod.id));
-}
-
 function filteredMods(groupId) {
   const query = state.search.trim().toLowerCase();
   return state.mods.filter(mod => {
     if (mod.groupId !== groupId) return false;
     if (!query) return true;
-    const equipment = (mod.equipment ?? []).flatMap(item => [item.name, item.type, item.display]);
-    return [mod.name, mod.category, mod.author, ...equipment].some(value => String(value ?? "").toLowerCase().includes(query));
+    const equipment = [mod, ...(mod.components ?? [])].flatMap(record =>
+      (record.equipment ?? []).flatMap(item => [item.name, item.type, item.display]));
+    const components = (mod.components ?? []).flatMap(item => [item.name, item.author, item.category]);
+    return [mod.name, mod.category, mod.author, ...components, ...equipment].some(value => String(value ?? "").toLowerCase().includes(query));
   });
 }
 
@@ -148,25 +184,33 @@ function activeMod() {
   return state.mods.find(mod => mod.id === state.activeId) ?? null;
 }
 
+function activeComponent(mod = activeMod()) {
+  return mod?.components?.find(item => item.id === state.activeComponentId) ?? null;
+}
+
+function tool(action, label, svg, { className = "btn", id, component, disabled = state.busy } = {}) {
+  return `<button class="${className} tool-button" data-action="${action}"${id != null ? ` data-id="${id}"` : ""}${component != null ? ` data-comp="${component}"` : ""} title="${esc(label)}" aria-label="${esc(label)}" ${disabled ? "disabled" : ""}>${svg}</button>`;
+}
+
 function previewSrc(mod) {
   return mod?.hasPreview ? apiUrl(mod.previewUrl) : "";
 }
 
-function renderEquipment(mod) {
-  const items = mod?.equipment ?? [];
+function renderEquipment(mod, component) {
+  const items = (component ?? mod).equipment ?? [];
   if (items.length === 0) {
-    return '<div class="muted">未能从文件识别对应装备</div>';
+    return "";
   }
 
   const canEdit = !mod.enabled;
-  return `<div class="equip-list">${items.map(item => `
+  return `<div class="field"><span>游戏内装备</span><div class="equip-list">${items.map(item => `
     <div class="equip">
       <div>
         <div class="muted">${esc(item.type)}${item.isPfb ? " [pfb]" : ""}${item.isPak ? " [pak]" : ""}</div>
         <div>${esc(item.name)}</div>
       </div>
       <button class="btn" data-action="change-equip" data-kind="${esc(item.kind)}" data-id="${item.id}" data-pfb="${item.isPfb ? "true" : "false"}" ${!canEdit || state.busy ? "disabled" : ""} title="${canEdit ? "修改对应套装" : "请先禁用 MOD"}">修改</button>
-    </div>`).join("")}</div>`;
+    </div>`).join("")}</div></div>`;
 }
 
 function filteredEquipOptions() {
@@ -255,6 +299,68 @@ function submitPassword() {
   closePasswordPrompt(value || null);
 }
 
+// 来源地址:详情页按钮打开弹窗,填写后保存到 MOD 并用默认浏览器打开。
+function renderSourcePrompt() {
+  const prompt = state.sourcePrompt;
+  if (!prompt) return "";
+  return `
+    <div class="modal-mask" data-action="close-source">
+      <div class="modal" data-stop="true">
+        <div class="eyebrow">MOD SOURCE</div>
+        <h2 class="h1" style="font-size:18px;margin:8px 0 12px">来源地址</h2>
+        <div class="muted" style="margin-bottom:10px">填写 MOD 的来源网页（Nexus 页面、作者发布页等），留空则不保存。</div>
+        <input id="source-url" placeholder="https://www.nexusmods.com/monsterhunterwilds/mods/1234" value="${esc(prompt.value)}" autocomplete="off" spellcheck="false" style="width:100%;box-sizing:border-box" />
+        ${prompt.hint ? `<div class="status-error" style="margin-top:8px;font-size:12px">${esc(prompt.hint)}</div>` : ""}
+        <div class="actions" style="margin-top:12px">
+          <button class="btn" data-action="close-source">取消</button>
+          <button class="primary" data-action="apply-source">打开来源网页</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function normalizeSourceUrl(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  if (/^https?:\/\/\S+$/i.test(text)) return text;
+  // 允许直接粘贴 "nexusmods.com/xxx" 这类省略协议的网址。
+  if (/^[\w.-]+\.[a-z]{2,}(?:[/?#]\S*)?$/i.test(text)) return `https://${text}`;
+  return "";
+}
+
+async function applySourceUrl() {
+  const prompt = state.sourcePrompt;
+  if (!prompt || !state.game) return;
+  const input = document.getElementById("source-url");
+  const raw = (input?.value ?? prompt.value ?? "").trim();
+  const url = normalizeSourceUrl(raw);
+  if (!url) {
+    state.sourcePrompt = {
+      ...prompt,
+      value: raw,
+      hint: raw ? "网址格式不正确，请填写 http:// 或 https:// 链接" : "请先填写来源网址"
+    };
+    render();
+    document.getElementById("source-url")?.focus();
+    return;
+  }
+
+  state.sourcePrompt = null;
+  try {
+    const workspace = await request(`/api/games/${state.game.id}/mods/${prompt.modId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ homeUrl: url })
+    });
+    applyWorkspace(workspace, "已保存来源地址");
+  } catch (error) {
+    state.status = error.message || "来源地址保存失败";
+    state.statusError = true;
+  }
+
+  render();
+  openExternal(url);
+}
+
 // Nexus 更新:检查结果内联区、文件选择弹窗、验证/检查/下载动作。
 // 未设置 API Key 时禁止一切 Nexus 相关请求(检查/验证/下载),只给出配置提示。
 function nexusKeyMissing() {
@@ -282,11 +388,19 @@ function renderNexusUpdate(mod) {
            <div class="muted" style="font-size:12px;margin-top:4px">${esc(info.latestFileName)} · ${fmtSize(info.latestFileSize)} · ${esc(info.latestUploadedAt)}</div>`
         : '<div class="muted">已是最新版本</div>')
         : `<div class="muted">${(state.settings.nexusApiKey ?? "").trim() ? "未检查" : "未配置 API Key"}</div>`}
-      <div class="actions" style="margin-top:8px">
-        <button class="btn" data-action="check-nexus-update" data-id="${mod.id}" ${state.busy ? "disabled" : ""}>⟳ 检查更新</button>
-        ${info && info.files && info.files.length ? `<button class="btn" data-action="open-nexus-files" data-id="${mod.id}" ${state.busy ? "disabled" : ""}>选择文件下载</button>` : ""}
-      </div>
     </div>`;
+}
+
+function nexusControls() {
+  const hasKey = Boolean(state.settings.nexusApiKey?.trim());
+  const canDownload = hasKey && state.nexusAccess?.allowed === true;
+  return {
+    checkDisabled: !hasKey || state.busy,
+    downloadDisabled: !canDownload || state.busy,
+    checkTitle: hasKey ? "检查 Nexus 更新" : "检查 Nexus 更新（未配置 API Key）",
+    downloadTitle: canDownload ? "选择 Nexus 文件下载" : !hasKey ? "选择 Nexus 文件下载（未配置 API Key）"
+      : state.nexusAccess?.checking ? "选择 Nexus 文件下载（正在验证权限）" : "选择 Nexus 文件下载（需要已验证的 Premium Key）"
+  };
 }
 
 function renderNexusFiles() {
@@ -307,17 +421,20 @@ function renderNexusFiles() {
         <div class="muted" style="font-size:12px;margin-top:8px">API 下载需要 Nexus Premium;免费账户请在 N 网页面手动下载后使用「更新 MOD」。</div>
         <div class="actions" style="margin-top:12px">
           <button class="btn" data-action="close-nexus-files">取消</button>
-          <button class="primary" data-action="apply-nexus-download" ${state.busy ? "disabled" : ""}>下载并更新</button>
+          <button class="primary" data-action="apply-nexus-download" ${state.busy || !picker.selectedFileId ? "disabled" : ""}>下载并更新</button>
         </div>
       </div>
     </div>`;
 }
 
-async function checkNexusUpdate(modId) {
+async function checkNexusUpdate(modId, selectFile = false) {
   if (state.busy || !state.game || nexusKeyMissing()) return;
+  if (selectFile && nexusControls().downloadDisabled) return;
   state.busy = true;
+  render();
   try {
-    const data = await request(`/api/games/${state.game.id}/mods/${modId}/nexus/update-check`);
+    const data = (selectFile && state.nexusUpdates[modId]) ||
+      await request(`/api/games/${state.game.id}/mods/${modId}/nexus/update-check`);
     if (data.error) {
       state.status = data.status;
       state.statusError = true;
@@ -325,6 +442,14 @@ async function checkNexusUpdate(modId) {
       state.nexusUpdates[modId] = data;
       state.status = data.available ? `发现新版本 ${data.latestVersion || "?"}` : "已是最新版本";
       state.statusError = false;
+      if (selectFile) {
+        const files = data.files ?? [];
+        state.nexusFiles = {
+          modId,
+          files,
+          selectedFileId: files.find(file => file.fileId === data.latestFileId)?.fileId ?? files[0]?.fileId
+        };
+      }
     }
   } catch (error) {
     state.status = error.message || "检查更新失败";
@@ -376,7 +501,7 @@ async function checkAllNexusUpdates() {
 
 async function applyNexusDownload() {
   const picker = state.nexusFiles;
-  if (!picker || state.busy || !state.game || nexusKeyMissing()) return;
+  if (!picker?.selectedFileId || !state.game || nexusControls().downloadDisabled) return;
   const label = picker.files.find(file => file.fileId === picker.selectedFileId)?.fileName ?? "Nexus 文件";
   state.nexusFiles = null;
   state.busy = true;
@@ -414,44 +539,40 @@ async function applyNexusDownload() {
   }
 }
 
-async function validateNexusKey() {
-  if (state.busy) return;
-  const input = app.querySelector('[data-role="nexus-key"]');
-  const nexusApiKey = input ? input.value.trim() : (state.settings.nexusApiKey ?? "");
-  if (nexusApiKey.length === 0) {
-    state.nexusAccount = "请先填写 Nexus API Key";
-    state.status = "请先填写 Nexus API Key";
-    state.statusError = true;
-    render();
-    return;
+function syncNexusControls() {
+  const { checkDisabled, downloadDisabled, checkTitle, downloadTitle } = nexusControls();
+  for (const [action, disabled, title] of [
+    ["check-nexus-update", checkDisabled, checkTitle], ["open-nexus-files", downloadDisabled, downloadTitle]
+  ]) {
+    const button = app.querySelector(`[data-action="${action}"]`);
+    if (!button) continue;
+    button.disabled = disabled;
+    button.title = title;
+    button.setAttribute("aria-label", title);
   }
-  state.busy = true;
+  const account = app.querySelector('[data-role="nexus-account"]');
+  if (account) account.textContent = nexusAccountLabel();
+}
+
+function nexusAccountLabel() {
+  return state.nexusAccess?.label ?? "未配置 API Key";
+}
+
+async function refreshNexusAccess() {
+  const key = state.settings.nexusApiKey?.trim();
+  if (!key) return;
+  const access = state.nexusAccess = { checking: true, allowed: false, label: "正在验证 Nexus Key…" };
+  syncNexusControls();
   try {
-    await request("/api/settings", {
-      method: "PUT",
-      body: JSON.stringify({
-        checkGameRunning: state.settings.checkGameRunning,
-        installOption: state.settings.installOption,
-        nexusApiKey
-      })
-    });
-    state.settings.nexusApiKey = nexusApiKey;
     const data = await request("/api/nexus/validate", { method: "POST" });
-    if (data.error) {
-      state.nexusAccount = data.status;
-      state.status = data.status;
-      state.statusError = true;
-    } else {
-      state.nexusAccount = `Nexus 账户: ${data.name}（${data.isPremium ? "Premium" : "免费"}）`;
-      state.status = state.nexusAccount;
-      state.statusError = false;
-    }
+    if (data.error) throw new Error(data.status || "验证失败");
+    access.allowed = data.isPremium === true;
+    access.label = `Nexus 账户：${data.name}（${access.allowed ? "可直接下载" : "不可直接下载"}）`;
   } catch (error) {
-    state.status = error.message || "验证失败";
-    state.statusError = true;
+    access.label = error.message || "验证失败";
   } finally {
-    state.busy = false;
-    render();
+    access.checking = false;
+    if (state.nexusAccess === access) syncNexusControls();
   }
 }
 
@@ -464,18 +585,99 @@ function componentCounts(mod) {
   return { total: comps.length, enabled: comps.filter(item => item.enabled).length };
 }
 
-function renderComponentRows(mod, coverSize) {
+function renderComponentRows(mod) {
   const comps = mod.components ?? [];
   return comps.map((comp, index) => `
-    <div class="comp-row" data-mod="${mod.id}" data-comp="${comp.id}"${comp.hasPreview ? ` data-preview="${esc(apiUrl(comp.previewUrl))}"` : ""}>
-      <span class="comp-cover" style="width:${coverSize}px;height:${coverSize}px">${comp.hasPreview ? `<img src="${esc(apiUrl(comp.previewUrl))}" alt="" />` : '<span class="muted">◇</span>'}</span>
-      <span class="comp-name" title="${esc(comp.name)}">${esc(comp.name)}</span>
+    <div class="comp-row${state.activeId === mod.id && state.activeComponentId === comp.id ? " active" : ""}" data-mod="${mod.id}" data-comp="${comp.id}"${comp.hasPreview ? ` data-preview="${esc(apiUrl(comp.previewUrl))}"` : ""}>
+      <button class="comp-select" data-action="open-component" data-id="${mod.id}" data-comp="${comp.id}" title="${esc(comp.name)}">
+        ${comp.hasPreview ? `<span class="comp-cover"><img src="${esc(previewSrc(comp))}" alt="" /></span>` : ""}
+        <span class="comp-name">${esc(comp.name)}</span>
+      </button>
       <span class="comp-tools">
         ${index === 0 ? "" : `<button class="icon" data-action="comp-up" data-mod="${mod.id}" data-comp="${comp.id}" title="上移（靠后覆盖靠前）">↑</button>`}
         ${index === comps.length - 1 ? "" : `<button class="icon" data-action="comp-down" data-mod="${mod.id}" data-comp="${comp.id}" title="下移（靠后覆盖靠前）">↓</button>`}
         <button class="${switchClass(comp.enabled)}" data-action="comp-enable" data-mod="${mod.id}" data-comp="${comp.id}" data-on="${comp.enabled}"></button>
+        ${tool("component-menu", "组件菜单", iconMenu, { className: "icon", id: mod.id, component: comp.id })}
       </span>
     </div>`).join("");
+}
+
+function renderContextMenu() {
+  const menu = state.contextMenu;
+  if (!menu) return "";
+  const game = state.games.find(item => item.id === menu.gameId);
+  const x = Math.max(8, Math.min(menu.x, window.innerWidth - 184));
+  const y = Math.max(8, Math.min(menu.y, window.innerHeight - 90));
+  return `<div class="context-menu" style="left:${x}px;top:${y}px" role="group" aria-label="${game ? "游戏菜单" : "组件菜单"}">
+    ${game ? `<button data-action="game-settings" data-id="${game.id}">${iconGear}游戏设置</button>
+      <button data-action="game-launch" data-id="${game.id}" ${game.installed ? "" : "disabled"}>${iconPlay}运行游戏</button>`
+      : `<button data-action="open-mod-folder" data-id="${menu.modId}" data-comp="${menu.componentId}">${iconFolder}查看文件</button>`}
+  </div>`;
+}
+
+function renderConflictDialog() {
+  const conflict = state.conflictDialog;
+  if (!conflict) return "";
+  const equipment = Boolean(conflict.equipment);
+  return `<div class="modal-mask conflict-mask">
+    <div class="modal conflict-modal" role="alertdialog" aria-modal="true" aria-labelledby="conflict-title" data-stop="true">
+      <h2 id="conflict-title" class="detail-title">${equipment ? "装备替换冲突" : "MOD 文件覆盖"}</h2>
+      <p>${equipment ? `${conflict.name ? `「${esc(conflict.name)}」` : "此 MOD"} 的目标文件已存在，或多个文件要写入同一位置。未修改 MOD。` : "列表靠后的 MOD 优先生效。"}</p>
+      ${equipment ? "" : `<div class="conflict-list">${conflict.deployment.map(item =>
+        `<section><strong>${esc(item.winner)}</strong> 覆盖 <strong>${esc(item.overwritten)}</strong></section>`).join("")}</div>`}
+      <div class="actions"><button class="primary" data-action="close-conflict">知道了</button></div>
+    </div>
+  </div>`;
+}
+
+let toastKey = "";
+let toastVisible = false;
+let toastTimer;
+
+function renderToast() {
+  const key = `${state.busy}:${state.statusError}:${state.status}`;
+  if (key !== toastKey) {
+    clearTimeout(toastTimer);
+    toastKey = key;
+    toastVisible = state.busy || (state.status && state.status !== "就绪");
+    if (toastVisible && !state.busy) {
+      toastTimer = setTimeout(() => {
+        toastVisible = false;
+        app.querySelector(".status-toast")?.remove();
+      }, state.statusError ? 9000 : 5000);
+    }
+  }
+  return toastVisible && !state.conflictDialog ? `<div class="status-toast${!state.busy && state.statusError ? " status-error" : ""}" role="status">
+    <span>${state.busy ? "处理中…" : esc(state.status)}</span>
+    ${state.busy ? "" : `<button class="icon" data-action="close-toast" aria-label="关闭提示">${iconClose}</button>`}
+  </div>` : "";
+}
+
+function renderModDetail(mod, component) {
+  const detail = component ?? mod;
+  const kv = (label, value, color = "") => value ? `<div class="kv"><span>${label}</span><span class="${color}">${esc(value)}</span></div>` : "";
+  const ownerLabel = component ? "主 MOD" : "MOD";
+  const nexus = nexusControls();
+  return `<div class="detail-toolbar" role="toolbar" aria-label="MOD 操作">
+    ${tool("update-mod", `更新 ${ownerLabel}`, iconRefresh, { id: mod.id, className: "primary" })}
+    ${!mod.isBundle || component ? tool("open-mod-folder", "查看文件", iconFolder, { id: mod.id, component: component?.id }) : ""}
+    ${tool("open-source", "来源地址", iconLink, { id: mod.id })}
+    ${mod.nexusId > 0 ? tool("check-nexus-update", nexus.checkTitle, iconArrowUp, { id: mod.id, disabled: nexus.checkDisabled }) : ""}
+    ${mod.nexusId > 0 ? tool("open-nexus-files", nexus.downloadTitle, iconDownload, { id: mod.id, disabled: nexus.downloadDisabled }) : ""}
+    ${tool("uninstall", `删除 ${ownerLabel}`, iconTrash, { id: mod.id, className: "btn danger" })}
+  </div>
+  ${component ? `<button class="parent-link" data-action="open-mod" data-id="${mod.id}">${esc(mod.name)}</button>` : ""}
+  <h2 class="detail-title" title="${esc(detail.name)}">${esc(detail.name)}</h2>
+  ${detail.hasPreview ? `<div class="preview-box"><img src="${esc(previewSrc(detail))}" alt="" /></div>` : ""}
+  <div class="detail-metadata">
+    ${kv("类型", detail.category, "kv-accent")}
+    ${kv("版本", detail.version)}
+    ${kv("作者", detail.author)}
+    ${kv("文件数", `${detail.fileCount} 个`)}
+    ${component ? "" : kv("分组", mod.groupName) + kv("导入时间", mod.installedAt)}
+  </div>
+  ${renderEquipment(mod, component)}
+  ${mod.nexusId > 0 ? renderNexusUpdate(mod) : ""}`;
 }
 
 function esc(value) {
@@ -488,12 +690,20 @@ function esc(value) {
 
 function render() {
   const game = state.game;
-  const selected = selectedMods();
   const active = activeMod();
-  const pane = state.pane === "settings" ? "settings" : active && state.pane === "mod" ? "mod" : "info";
+  const pane = state.pane;
+  const component = activeComponent(active);
+  const settingsGame = state.games.find(item => item.id === state.gameSettingsId);
+  const detailScroll = pane === "settings" ? app.querySelector('.detail[data-pane="settings"]')?.scrollTop : null;
+  const nexusInput = app.querySelector('[data-role="nexus-key"]');
+  const nexusCaret = pane === "settings" && nexusInput && document.activeElement === nexusInput ? nexusInput.selectionStart : null;
+  applyAppearance(currentAppearance(), backgroundUrl());
   const list = app.querySelector(".list");
   const listScrollTop = list?.scrollTop ?? 0;
   const listScrollLeft = list?.scrollLeft ?? 0;
+  const componentPanel = app.querySelector(".comp-panel");
+  const componentScrollTop = componentPanel?.scrollTop ?? 0;
+  const componentScrollModId = componentPanel?.dataset.mod ?? null;
   const searchFocus = document.activeElement?.id === "search";
   const searchPos = searchFocus ? document.activeElement.selectionStart : null;
   const equipSearchFocus = document.activeElement?.id === "equip-search";
@@ -513,48 +723,27 @@ function render() {
           ${state.games.map(item => {
             const icon = gameIcons[item.id];
             return `
-              <div class="game${game?.id === item.id ? " active" : ""}" data-action="select-game" data-id="${item.id}" role="button" tabindex="0">
-                <span class="bar"></span>
+              <button class="game${game?.id === item.id ? " active" : ""}" data-action="select-game" data-id="${item.id}" title="${esc(item.shortName)}" aria-label="${esc(item.displayName)}" aria-pressed="${game?.id === item.id}">
                 <span class="game-icon">${icon ? `<img src="${icon}" alt="" />` : esc(item.shortName.slice(0, 1))}</span>
-                <span>
-                  <div>${esc(item.shortName)}</div>
-                  <div class="muted">${item.installed ? "已安装" : "未配置"}</div>
-                </span>
-                <span class="game-tools">
-                  ${item.installed ? '<span class="dot"></span>' : ""}
-                  <button class="icon" data-action="game-settings" data-id="${item.id}" title="设置" aria-label="设置">${iconGear}</button>
-                  <button class="icon" data-action="game-launch" data-id="${item.id}" title="启动游戏" aria-label="启动游戏" ${item.installed ? "" : "disabled"}>${iconPlay}</button>
-                </span>
-              </div>`;
+              </button>`;
           }).join("")}
+          <div class="sidebar-settings${pane === "settings" ? " active" : ""}">${tool("global-settings", "通用设置", iconGear, { className: "icon" })}</div>
         </aside>
         <main class="workspace">
-          <div class="toolbar">
-            <h1 class="h1">${esc(game?.displayName ?? "mh-mod-manager")}</h1>
-          </div>
-          <div class="searchrow">
-            <label class="search">
-              <span class="muted">⌕</span>
-              <input id="search" placeholder="搜索 MOD 名称、类型、作者或装备" value="${esc(state.search)}" />
-            </label>
-            <div class="stats">
-              <div class="stat"><b>${state.mods.length}</b><span class="muted">全部</span></div>
-              <div class="stat"><b style="color:var(--accent)">${state.mods.filter(m => m.enabled).length}</b><span class="muted">已启用</span></div>
+          <div class="ws-header">
+            <div class="list-toolbar" role="toolbar" aria-label="MOD 列表操作">
+              ${tool("import", "添加 MOD", iconPlus, { className: "primary import-tool" })}
+              <div class="list-secondary-tools">
+                ${tool("refresh", "刷新", iconRefresh)}
+                ${tool("create-group", "新建分组", iconFolderPlus)}
+                ${tool("check-all-updates", "检查所有 Nexus MOD 更新", iconArrowUp, { disabled: nexusControls().checkDisabled })}
+              </div>
             </div>
-          </div>
-          <div class="batch card">
-            <button class="btn" data-action="refresh" ${state.busy ? "disabled" : ""}>刷新</button>
-            <button class="btn" data-action="create-group" ${state.busy ? "disabled" : ""}>新建分组</button>
-            <button class="btn" data-action="select-all">全选</button>
-            <button class="btn" data-action="clear-selection">清除选择</button>
-            <span class="muted">已选 ${selected.length} 个 MOD</span>
-            <span class="muted">移动到</span>
-            <select id="move-target">
-              ${state.groups.map(group => `<option value="${group.id}" ${group.id === state.moveTarget ? "selected" : ""}>${esc(group.name)}</option>`).join("")}
-            </select>
-              <button class="primary" data-action="move-selected" ${state.busy || selected.length === 0 ? "disabled" : ""}>批量移动</button>
-              <button class="btn" data-action="check-all-updates" ${state.busy ? "disabled" : ""}>检查更新</button>
-              <button class="primary" data-action="import" ${state.busy ? "disabled" : ""}>添加mod</button>
+            <div class="mod-count" title="已启用 / 全部"><b>${state.mods.filter(m => m.enabled).length}</b><span>/</span><strong>${state.mods.length}</strong></div>
+            <label class="ws-search">
+              ${iconSearch}
+              <input id="search" aria-label="搜索 MOD" placeholder="搜索 MOD 名称、类型、作者或装备" value="${esc(state.search)}" />
+            </label>
           </div>
           <div class="list">
             ${visibleGroups().map(group => {
@@ -562,7 +751,7 @@ function render() {
               const show = !group.collapsed || state.search.trim();
               const name = state.renameDrafts[group.id] ?? group.name;
               return `
-                <section class="card group">
+                <section class="group">
                   <div class="group-head">
                     <div class="group-title">
                       <button class="icon" data-action="toggle-group" data-id="${group.id}">${show ? "▾" : "▸"}</button>
@@ -577,13 +766,7 @@ function render() {
                     </div>
                   </div>
                   ${show ? `<div class="mods">${mods.map(mod => `
-                    <article class="mod${state.selectedIds.has(mod.id) ? " selected" : ""}${state.activeId === mod.id ? " active" : ""}" data-action="open-mod" data-id="${mod.id}">
-                      <input type="checkbox" data-role="select-mod" data-id="${mod.id}" ${state.selectedIds.has(mod.id) ? "checked" : ""} />
-                      ${mod.isBundle ? (() => {
-                        const counts = componentCounts(mod);
-                        const open = state.bundleOpenId === mod.id;
-                        return `<button class="comp-toggle" data-action="toggle-components" data-id="${mod.id}" title="展开组件列表">${open ? "▴" : "▾"} 组件 ${counts.enabled}/${counts.total}</button>`;
-                      })() : '<span class="comp-slot"></span>'}
+                    <article class="mod${state.activeId === mod.id ? " active" : ""}" data-action="open-mod" data-id="${mod.id}">
                       <div class="thumb">${mod.hasPreview ? `<img src="${esc(previewSrc(mod))}" alt="" />` : esc(mod.category)}</div>
                       <div class="meta">
                         <input class="name" data-role="mod-name" data-id="${mod.id}" value="${esc(state.modRenameDrafts[mod.id] ?? mod.name)}" />
@@ -597,34 +780,46 @@ function render() {
                         </div>
                       </div>
                       <div class="row-actions">
-                        <button class="icon" data-action="mod-up" data-id="${mod.id}">↑</button>
-                        <button class="icon" data-action="mod-down" data-id="${mod.id}">↓</button>
+                        ${mod.isBundle ? (() => {
+                          const counts = componentCounts(mod);
+                          const open = state.bundleOpenId === mod.id;
+                          return `<button class="comp-toggle" data-action="toggle-components" data-id="${mod.id}" title="展开组件列表">${open ? "▴" : "▾"} 组件 ${counts.enabled}/${counts.total}</button>`;
+                        })() : ""}
+                        <button class="icon" data-action="mod-up" data-id="${mod.id}" title="上移（靠后覆盖靠前）">↑</button>
+                        <button class="icon" data-action="mod-down" data-id="${mod.id}" title="下移（靠后覆盖靠前）">↓</button>
                         <button class="${switchClass(mod.enabled)}" data-action="mod-enable" data-id="${mod.id}" data-on="${mod.enabled}"></button>
                       </div>
                     </article>
-                    ${state.bundleOpenId === mod.id ? `<div class="comp-panel">${renderComponentRows(mod, 32)}<div class="muted" style="font-size:12px">仅总开关开启时组件部分才会启用</div></div>` : ""}`).join("") || '<div class="empty">这个分组还没有 MOD</div>'}</div>` : ""}
+                    ${state.bundleOpenId === mod.id ? `<div class="comp-panel" data-mod="${mod.id}">${renderComponentRows(mod)}</div>` : ""}`).join("") || '<div class="empty">这个分组还没有 MOD</div>'}</div>` : ""}
                 </section>`;
             }).join("") || '<div class="empty">还没有导入任何 MOD</div>'}
           </div>
         </main>
-        <aside class="detail">
-          ${pane === "settings" ? `
+        <aside class="detail" data-pane="${pane}">
+          ${pane === "game-settings" && settingsGame ? `
+            <h2 class="detail-title">${esc(settingsGame.shortName)} 设置</h2>
             <div class="field">
               <span>游戏目录</span>
-              <div class="muted">${esc(game?.path || "未设置游戏目录")}</div>
+              <div class="detail-path">${esc(settingsGame.path || "未设置游戏目录")}</div>
               <div class="actions stack">
-                <button class="btn" data-action="pick-game">选择游戏目录</button>
-                <button class="btn" data-action="open-folder" ${game?.path ? "" : "disabled"}>打开游戏目录</button>
+                <button class="btn" data-action="pick-game" ${state.busy ? "disabled" : ""}>选择游戏目录</button>
+                <button class="btn" data-action="open-folder" ${settingsGame.path ? "" : "disabled"}>打开游戏目录</button>
               </div>
             </div>
             <div class="field">
+              <span>部署</span>
+              <div class="detail-hint">${esc(settingsGame.pakState)}</div>
+              <div class="actions"><button class="btn danger" data-action="clean" ${state.busy || !settingsGame.installed ? "disabled" : ""}>清理部署文件</button></div>
+            </div>
+          ` : pane === "settings" ? `
+            <h2 class="detail-title">通用设置</h2>
+            <div class="field">
               <span>部署行为</span>
               <label class="check"><input type="checkbox" data-role="setting" data-key="checkGameRunning" ${state.settings.checkGameRunning ? "checked" : ""} /> 游戏运行时阻止修改</label>
-              <div class="muted" style="font-size:12px">崛起/荒野的PAK文件将放入游戏根目录的pak_mods文件夹，请确保reframework前置已更新到支持的版本。</div>
             </div>
             <div class="field">
               <span>安装源文件</span>
-              <select data-role="install-option">
+              <select class="field-select" data-role="install-option">
                 <option value="0" ${state.settings.installOption === 0 ? "selected" : ""}>不复制，保留原位置</option>
                 <option value="1" ${state.settings.installOption === 1 ? "selected" : ""}>复制到工作区</option>
                 <option value="2" ${state.settings.installOption === 2 ? "selected" : ""}>移动到工作区</option>
@@ -632,55 +827,44 @@ function render() {
             </div>
             <div class="field">
               <span>Nexus API Key</span>
-              <input data-role="nexus-key" type="password" placeholder="在 nexusmods.com 个人设置里生成" value="${esc(state.settings.nexusApiKey ?? "")}" autocomplete="off" spellcheck="false" style="width:100%;box-sizing:border-box" />
-              <div class="actions" style="margin-top:8px">
-                <button class="btn" data-action="validate-nexus-key" ${state.busy ? "disabled" : ""}>验证 Key</button>
+              <input class="field-input" data-role="nexus-key" aria-label="Nexus API Key" type="password" value="${esc(state.nexusKeyDraft ?? state.settings.nexusApiKey ?? "")}" autocomplete="off" spellcheck="false" />
+              <div class="actions">
+                <button class="btn" data-action="validate-nexus-key" ${state.busy ? "disabled" : ""}>保存并验证 Key</button>
               </div>
-              <div class="muted" style="font-size:12px">${esc(state.nexusAccount ?? "用于检查 MOD 更新与下载更新（下载需 Premium）")}</div>
+              <div class="detail-hint" data-role="nexus-account" aria-live="polite">${esc(nexusAccountLabel())}</div>
             </div>
-          ` : pane === "mod" && active ? `
-            <div class="eyebrow">MOD PREVIEW</div>
-            <h2 class="h1" style="font-size:21px;margin:8px 0 0">${esc(active.name)}</h2>
-            <div class="preview-box">${active.hasPreview ? `<img src="${esc(previewSrc(active))}" alt="" />` : '<span class="muted">没有预览图</span>'}</div>
-             <div class="card">
-                <div class="kv"><span class="muted">类型</span><span style="color:var(--accent)">${esc(active.category)}</span></div>
-               <div class="kv"><span class="muted">版本</span><span>${esc(active.version)}</span></div>
-              <div class="kv"><span class="muted">作者</span><span>${esc(active.author)}</span></div>
-              <div class="kv"><span class="muted">文件</span><span>${active.fileCount} 个文件</span></div>
-              <div class="kv"><span class="muted">分组</span><span>${esc(active.groupName)}</span></div>
-               <div class="kv"><span class="muted">导入时间</span><span>${esc(active.installedAt)}</span></div>
-             </div>
-             <div class="field">
-               <span>游戏内装备</span>
-               ${renderEquipment(active)}
-                ${active.enabled ? '<div class="muted">禁用 MOD 后可修改对应套装</div>' : '<div class="muted">将文件重定向到另一套游戏内装备，与原版盒子一致</div>'}
-             </div>
-             ${active.nexusId > 0 ? renderNexusUpdate(active) : ""}
-             <div class="actions mod-tools">
-               <button class="primary" data-action="update-mod" data-id="${active.id}" ${state.busy ? "disabled" : ""}>↻ 更新 MOD</button>
-               <button class="btn" data-action="open-mod-folder" data-id="${active.id}" ${state.busy ? "disabled" : ""}>▣ 查看文件</button>
-               ${active.homeUrl ? `<button class="btn" data-action="open-nexus" data-url="${esc(active.homeUrl)}" ${state.busy ? "disabled" : ""}>访问N网页面</button>` : ""}
-               <button class="btn danger" data-action="uninstall" data-id="${active.id}" title="删除 MOD" ${state.busy ? "disabled" : ""}><svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><span>删除 MOD</span></button>
-             </div>
-           ` : `
-            <div class="empty-detail"></div>
-           `}
+            ${renderAppearance(currentAppearance(), Boolean(state.settings.backgroundRevision), state.busy)}
+          ` : pane === "mod" && active ? renderModDetail(active, component) : `
+            <div class="detail-empty">
+              <div class="detail-empty-icon">◈</div>
+              <div>点击左侧 MOD 查看详情</div>
+            </div>
+          `}
         </aside>
       </div>
-      <footer class="footer">
-        <span class="${state.busy ? "muted" : state.statusError ? "status-error" : "muted"}">${state.busy ? "处理中..." : esc(state.status)}</span>
-        <button class="btn" data-action="clean" ${state.busy || !game?.installed ? "disabled" : ""}>清理部署文件</button>
-      </footer>
+      ${renderToast()}
+      ${renderContextMenu()}
       <div class="dropmask" id="dropmask"><div class="dropcard">松开以批量导入 MOD</div></div>
       ${renderEquipPicker()}
       ${renderPasswordPrompt()}
+      ${renderSourcePrompt()}
       ${renderNexusFiles()}
+      ${state.deletePrompt ? `<div class="modal-mask" data-action="cancel-delete"><div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" data-stop="true">
+        <h2 id="delete-title" class="detail-title">删除 ${state.deletePrompt.isBundle ? "主 " : ""}MOD</h2>
+        <p>确认删除「${esc(state.deletePrompt.name)}」${state.deletePrompt.isBundle ? "及其全部组件" : ""}？</p>
+        <div class="actions"><button class="btn" data-action="cancel-delete">取消</button><button class="btn danger" data-action="confirm-delete">删除</button></div>
+      </div></div>` : ""}
+      ${renderConflictDialog()}
     </div>
   `;
   const nextList = app.querySelector(".list");
   if (nextList) {
     nextList.scrollTop = listScrollTop;
     nextList.scrollLeft = listScrollLeft;
+  }
+  const nextComponentPanel = app.querySelector(".comp-panel");
+  if (nextComponentPanel && nextComponentPanel.dataset.mod === componentScrollModId) {
+    nextComponentPanel.scrollTop = componentScrollTop;
   }
   if (searchFocus) {
     const input = app.querySelector("#search");
@@ -692,43 +876,65 @@ function render() {
     input?.focus();
     if (equipSearchPos != null) input.setSelectionRange(equipSearchPos, equipSearchPos);
   }
+  if (detailScroll != null) app.querySelector(".detail").scrollTop = detailScroll;
+  if (nexusCaret != null) {
+    const input = app.querySelector('[data-role="nexus-key"]');
+    input?.focus({ preventScroll: true });
+    input?.setSelectionRange(nexusCaret, nexusCaret);
+  }
+  if (state.conflictDialog) app.querySelector('[data-action="close-conflict"]')?.focus();
 }
 
 function onClick(event) {
-  if (event.target.closest("select, option, input, textarea, label")) return;
-  if (state.bundleOpenId != null &&
-      !event.target.closest(".comp-panel") &&
-      event.target.closest("[data-action]")?.dataset.action !== "toggle-components") {
-    state.bundleOpenId = null;
-    render();
-  }
   const target = event.target.closest("[data-action]");
-  if (!target || !state.game) return;
-  if (target.closest("[data-stop]") && !event.target.closest("[data-action]")) return;
+  if (state.contextMenu) {
+    state.contextMenu = null;
+    app.querySelector(".context-menu")?.remove();
+  }
+  if (!target || target.disabled || event.target.closest("select, option, input, textarea, label")) return;
   event.stopPropagation();
   const id = Number(target.dataset.id);
   const action = target.dataset.action;
-  const gameId = state.game.id;
+  const gameId = state.game?.id;
 
   if (action === "select-game") {
-    run(() => request(`/api/games/${target.dataset.id}/select`, { method: "POST" }));
+    if (target.dataset.id === gameId) return;
+    run(async () => {
+      const data = await request(`/api/games/${target.dataset.id}/select`, { method: "POST" });
+      if (state.pane === "game-settings") state.pane = "info";
+      return data;
+    });
+    return;
+  }
+  if (action === "global-settings") {
+    state.pane = "settings";
+    render();
+    return;
+  }
+  if (action === "appearance-pick") {
+    app.querySelector("#appearance-image")?.click();
+    return;
+  }
+  if (action === "appearance-remove") {
+    changeBackground();
+    return;
+  }
+  if (action === "appearance-theme" || action === "appearance-fit" || action === "appearance-reset") {
+    const changes = action === "appearance-reset" ? defaultAppearance :
+      { [action === "appearance-theme" ? "theme" : "fit"]: target.dataset.value };
+    saveAppearance(changes);
     return;
   }
   if (action === "game-settings") {
-    run(async () => {
-      const workspace = await request(`/api/games/${target.dataset.id}/select`, { method: "POST" });
-      state.pane = "settings";
-      return workspace;
-    });
+    state.gameSettingsId = target.dataset.id;
+    state.pane = "game-settings";
+    render();
     return;
   }
   if (action === "game-launch") {
     run(async () => {
-      await request(`/api/games/${target.dataset.id}/select`, { method: "POST" });
       const result = await request(`/api/games/${target.dataset.id}/launch`, { method: "POST" });
-      const workspace = await request(`/api/workspace/${target.dataset.id}`);
-      workspace.status = result.status || "已通过 Steam 启动游戏";
-      return workspace;
+      return { status: result.status, error: result.error };
     });
     return;
   }
@@ -746,8 +952,21 @@ function onClick(event) {
   }
   if (action === "open-mod") {
     state.activeId = id;
+    state.activeComponentId = null;
     state.pane = "mod";
     render();
+    return;
+  }
+  if (action === "open-component") {
+    state.activeId = id;
+    state.activeComponentId = Number(target.dataset.comp);
+    state.pane = "mod";
+    render();
+    return;
+  }
+  if (action === "component-menu") {
+    const rect = target.getBoundingClientRect();
+    openContextMenu({ modId: id, componentId: Number(target.dataset.comp), x: rect.right, y: rect.bottom + 4 });
     return;
   }
   if (action === "toggle-components") {
@@ -755,6 +974,7 @@ function onClick(event) {
     // 展开哪个主 MOD,右侧详情就显示哪个;收起不改选中。
     if (state.bundleOpenId === id) {
       state.activeId = id;
+      state.activeComponentId = null;
       state.pane = "mod";
     }
     render();
@@ -778,19 +998,6 @@ function onClick(event) {
     }));
     return;
   }
-  if (action === "select-all") {
-    visibleGroups().forEach(group => {
-      if (group.collapsed && !state.search.trim()) return;
-      filteredMods(group.id).forEach(mod => state.selectedIds.add(mod.id));
-    });
-    render();
-    return;
-  }
-  if (action === "clear-selection") {
-    state.selectedIds.clear();
-    render();
-    return;
-  }
   if (action === "refresh") {
     run(() => request(`/api/games/${gameId}/refresh`, { method: "POST" }));
     return;
@@ -812,22 +1019,30 @@ function onClick(event) {
     return;
   }
   if (action === "open-mod-folder") {
-    openModFolder(id);
+    openModFolder(id, target.dataset.comp);
     return;
   }
-  if (action === "open-nexus") {
-    openExternal(target.dataset.url);
+  if (action === "open-source") {
+    const mod = state.mods.find(item => item.id === id);
+    state.sourcePrompt = { modId: id, value: mod?.homeUrl ?? "", hint: "" };
+    render();
+    const input = document.getElementById("source-url");
+    input?.focus();
+    input?.select();
+    return;
+  }
+  if (action === "close-source") {
+    if (target.classList.contains("modal-mask") && event.target.closest("[data-stop]")) return;
+    state.sourcePrompt = null;
+    render();
+    return;
+  }
+  if (action === "apply-source") {
+    applySourceUrl();
     return;
   }
   if (action === "clean") {
-    run(() => request(`/api/games/${gameId}/clean`, { method: "POST" }));
-    return;
-  }
-  if (action === "move-selected") {
-    run(() => request(`/api/games/${gameId}/groups/${state.moveTarget}/mods`, {
-      method: "POST",
-      body: JSON.stringify({ modIds: [...state.selectedIds] })
-    }));
+    mutateGameSettings(state.gameSettingsId, "clean", { method: "POST" });
     return;
   }
   if (action === "toggle-group") {
@@ -868,7 +1083,32 @@ function onClick(event) {
     return;
   }
   if (action === "uninstall") {
-    run(() => request(`/api/games/${gameId}/mods/${id}`, { method: "DELETE" }));
+    state.deletePrompt = state.mods.find(mod => mod.id === id);
+    render();
+    app.querySelector('.modal button[data-action="cancel-delete"]')?.focus();
+    return;
+  }
+  if (action === "cancel-delete") {
+    if (target.classList.contains("modal-mask") && event.target.closest("[data-stop]")) return;
+    state.deletePrompt = null;
+    render();
+    return;
+  }
+  if (action === "confirm-delete") {
+    const mod = state.deletePrompt;
+    state.deletePrompt = null;
+    if (mod) run(() => request(`/api/games/${gameId}/mods/${mod.id}`, { method: "DELETE" }));
+    return;
+  }
+  if (action === "close-conflict") {
+    state.conflictDialog = null;
+    render();
+    app.querySelector("#equip-search")?.focus();
+    return;
+  }
+  if (action === "close-toast") {
+    toastVisible = false;
+    app.querySelector(".status-toast")?.remove();
     return;
   }
   if (action === "mod-enable") {
@@ -905,7 +1145,7 @@ function onClick(event) {
     return;
   }
   if (action === "validate-nexus-key") {
-    validateNexusKey();
+    saveSettings(true);
     return;
   }
   if (action === "check-nexus-update") {
@@ -917,15 +1157,7 @@ function onClick(event) {
     return;
   }
   if (action === "open-nexus-files") {
-    const info = state.nexusUpdates[Number(target.dataset.id)];
-    if (info?.files?.length) {
-      state.nexusFiles = {
-        modId: Number(target.dataset.id),
-        files: info.files,
-        selectedFileId: info.latestFileId || info.files[0].fileId
-      };
-      render();
-    }
+    checkNexusUpdate(id, true);
     return;
   }
   if (action === "pick-nexus-file") {
@@ -950,7 +1182,36 @@ function onClick(event) {
   }
 }
 
+function openContextMenu(menu) {
+  if (state.busy) return;
+  state.contextMenu = menu;
+  render();
+  app.querySelector(".context-menu button:not(:disabled)")?.focus();
+}
+
+function onContextMenu(event) {
+  const game = event.target.closest(".game");
+  const row = event.target.closest(".comp-row");
+  if (!game && !row) return;
+  event.preventDefault();
+  const rect = (game ?? row).getBoundingClientRect();
+  const position = { x: event.clientX || rect.right, y: event.clientY || rect.bottom };
+  openContextMenu(game ? { ...position, gameId: game.dataset.id }
+    : { ...position, modId: Number(row.dataset.mod), componentId: Number(row.dataset.comp) });
+}
+
 function onInput(event) {
+  const { target } = event;
+  if (target.dataset.appearance) {
+    const appearance = { ...currentAppearance(), [target.dataset.appearance]: Number(target.value) };
+    applyAppearance(appearance, backgroundUrl());
+    target.parentElement.querySelector("output").value = target.value + target.dataset.unit;
+    return;
+  }
+  if (target.dataset.role === "nexus-key") {
+    state.nexusKeyDraft = target.value;
+    return;
+  }
   if (event.target.id === "search") {
     state.search = event.target.value;
     render();
@@ -967,13 +1228,22 @@ function onInput(event) {
   if (event.target.id === "equip-search" && state.equipPicker) {
     state.equipPicker.query = event.target.value;
     render();
+    return;
+  }
+  if (event.target.id === "source-url" && state.sourcePrompt) {
+    // 只记草稿,不重渲染,避免输入框失焦。
+    state.sourcePrompt.value = event.target.value;
   }
 }
 
 function onChange(event) {
   const target = event.target;
-  if (target.id === "move-target") {
-    state.moveTarget = Number(target.value);
+  if (target.id === "appearance-image") {
+    if (target.files[0]) changeBackground(target.files[0]);
+    return;
+  }
+  if (target.dataset.appearance) {
+    saveAppearance({ [target.dataset.appearance]: Number(target.value) });
     return;
   }
   if (target.dataset.role === "group-name" && state.game) {
@@ -991,13 +1261,6 @@ function onChange(event) {
     }));
     return;
   }
-  if (target.dataset.role === "select-mod") {
-    const id = Number(target.dataset.id);
-    if (target.checked) state.selectedIds.add(id);
-    else state.selectedIds.delete(id);
-    render();
-    return;
-  }
   if (target.dataset.role === "mod-group" && state.game) {
     run(() => request(`/api/games/${state.game.id}/mods/${target.dataset.id}/group`, {
       method: "POST",
@@ -1005,7 +1268,7 @@ function onChange(event) {
     }));
     return;
   }
-  if (target.dataset.role === "setting" || target.dataset.role === "install-option" || target.dataset.role === "nexus-key") {
+  if (target.dataset.role === "setting" || target.dataset.role === "install-option") {
     saveSettings();
     return;
   }
@@ -1019,50 +1282,88 @@ function onChange(event) {
   }
 }
 
-async function saveSettings() {
+async function saveSettings(saveKey = false) {
   const checkGameRunning = app.querySelector('[data-key="checkGameRunning"]')?.checked ?? state.settings.checkGameRunning;
   const installOption = Number(app.querySelector("[data-role='install-option']")?.value ?? state.settings.installOption);
-  const keyInput = app.querySelector("[data-role='nexus-key']");
-  const nexusApiKey = keyInput ? keyInput.value.trim() : (state.settings.nexusApiKey ?? "");
+  const nexusApiKey = saveKey ? (state.nexusKeyDraft ?? state.settings.nexusApiKey ?? "").trim() : undefined;
+  let saved = false;
   await run(async () => {
     const data = await request("/api/settings", {
       method: "PUT",
       body: JSON.stringify({ checkGameRunning, installOption, nexusApiKey })
     });
-    state.settings.nexusApiKey = nexusApiKey;
-    applyWorkspace(data.workspace, "设置已保存");
-    return data.workspace;
+    if (saveKey) state.nexusKeyDraft = null;
+    saved = true;
+    return { ...data.workspace, status: "设置已保存" };
+  });
+  if (saved && saveKey) void refreshNexusAccess();
+}
+
+function currentAppearance() {
+  return state.settings.appearance ?? defaultAppearance;
+}
+
+function backgroundUrl() {
+  const revision = state.settings.backgroundRevision;
+  return revision ? apiUrl(`/api/settings/appearance/image?v=${encodeURIComponent(revision)}`) : "";
+}
+
+function saveAppearance(changes) {
+  return run(async () => {
+    const data = await request("/api/settings/appearance", {
+      method: "PUT",
+      body: JSON.stringify({ ...currentAppearance(), ...changes })
+    });
+    if (data.error) return data;
+    state.settings.appearance = data.appearance;
+    return { status: "外观已保存" };
+  });
+}
+
+function changeBackground(file) {
+  return run(async () => {
+    const data = await request("/api/settings/appearance/image", file
+      ? { method: "PUT", body: JSON.stringify({ image: await readBackgroundImage(file) }) }
+      : { method: "DELETE" });
+    if (data.error) return data;
+    state.settings.backgroundRevision = data.backgroundRevision;
+    return { status: file ? "背景已保存" : "已移除背景图片" };
   });
 }
 
 async function openEquipPicker(kind, id, isPfb) {
-  state.equipPicker = { kind, fromId: id, toId: id, isPfb, query: "", withTex: false, filterUsed: true };
+  const picker = { gameId: state.game.id, modId: state.activeId, componentId: state.activeComponentId,
+    kind, fromId: id, toId: id, isPfb, query: "", withTex: false, filterUsed: true };
+  state.equipPicker = picker;
   state.equipCatalog = { kind, items: [], loading: true };
   render();
   try {
-    const data = await request(`/api/games/${state.game.id}/equipment?kind=${encodeURIComponent(kind)}`);
-    if (!state.equipPicker || state.equipPicker.kind !== kind) return;
+    const data = await request(`/api/games/${picker.gameId}/equipment?kind=${encodeURIComponent(kind)}&excludeMod=${picker.modId}`);
+    if (state.equipPicker !== picker) return;
     state.equipCatalog = { kind, items: data.items ?? [] };
   } catch (error) {
+    if (state.equipPicker !== picker) return;
     state.status = error.message || "无法加载装备列表";
     state.statusError = true;
     state.equipPicker = null;
   }
   render();
+  document.getElementById("equip-search")?.focus();
 }
 
 async function applyEquipChange() {
   const picker = state.equipPicker;
-  if (!picker || !state.game || !state.activeId) return;
+  if (!picker || picker.toId === picker.fromId) return;
   await run(async () => {
-    const data = await request(`/api/games/${state.game.id}/mods/${state.activeId}/equipment`, {
+    const data = await request(`/api/games/${picker.gameId}/mods/${picker.modId}/equipment`, {
       method: "POST",
       body: JSON.stringify({
         kind: picker.kind,
         fromId: picker.fromId,
         toId: picker.toId,
         isPfb: picker.isPfb,
-        withTex: picker.withTex
+        withTex: picker.withTex,
+        componentId: picker.componentId
       })
     });
     if (!data.error) state.equipPicker = null;
@@ -1172,16 +1473,27 @@ async function importMods(paths) {
 }
 
 async function pickGame() {
+  const gameId = state.gameSettingsId;
   const folder = window.mhModManager ? await window.mhModManager.pickFolder() : "";
   if (!folder) return;
-  await run(() => request(`/api/games/${state.game.id}/path`, {
+  await mutateGameSettings(gameId, "path", {
     method: "PUT",
     body: JSON.stringify({ path: folder })
-  }));
+  });
+}
+
+async function mutateGameSettings(gameId, action, options) {
+  if (!gameId) return;
+  await run(async () => {
+    const data = await request(`/api/games/${gameId}/${action}`, options);
+    if (gameId === state.game?.id) return data;
+    if (data.game) state.games = state.games.map(item => item.id === gameId ? data.game : item);
+    return { status: data.status, error: data.error };
+  });
 }
 
 async function openGameFolder() {
-  const folder = state.game?.path;
+  const folder = state.games.find(item => item.id === state.gameSettingsId)?.path;
   if (!folder) {
     state.status = "未设置游戏目录";
     state.statusError = true;
@@ -1215,7 +1527,7 @@ function openExternal(url) {
   window.open(url, "_blank", "noopener");
 }
 
-async function openModFolder(id) {
+async function openModFolder(id, component) {
   if (!window.mhModManager?.openPath || !state.game) {
     state.status = "当前环境无法打开文件夹";
     state.statusError = true;
@@ -1224,7 +1536,8 @@ async function openModFolder(id) {
   }
 
   try {
-    const result = await request(`/api/games/${state.game.id}/mods/${id}/folder`);
+    const query = component ? `?component=${encodeURIComponent(component)}` : "";
+    const result = await request(`/api/games/${state.game.id}/mods/${id}/folder${query}`);
     const error = await window.mhModManager.openPath(result.path);
     state.status = error ? `无法打开 MOD 文件夹: ${error}` : "已打开 MOD 文件夹";
     state.statusError = Boolean(error);
@@ -1285,8 +1598,29 @@ async function start() {
   app.addEventListener("click", onClick);
   app.addEventListener("input", onInput);
   app.addEventListener("change", onChange);
+  app.addEventListener("contextmenu", onContextMenu);
   setupHoverPreview();
   window.addEventListener("keydown", event => {
+    if (event.key === "Enter" && !event.isComposing && event.target?.dataset?.role === "nexus-key") {
+      event.preventDefault();
+      saveSettings(true);
+      return;
+    }
+    if (state.conflictDialog) {
+      if (event.key === "Escape") app.querySelector('[data-action="close-conflict"]')?.click();
+      if (event.key === "Tab") event.preventDefault();
+      return;
+    }
+    if (state.contextMenu && event.key === "Escape") {
+      state.contextMenu = null;
+      render();
+      return;
+    }
+    if (state.deletePrompt && event.key === "Escape") {
+      state.deletePrompt = null;
+      render();
+      return;
+    }
     if (state.passwordPrompt) {
       // 密码弹窗要在 busy 期间可交互:Esc 取消,回车提交。
       if (event.key === "Escape" && !event.isComposing) {
@@ -1298,25 +1632,38 @@ async function start() {
       }
       return;
     }
-    if (event.key === "Escape" && !state.busy) {
-      if (state.bundleOpenId != null) {
-        state.bundleOpenId = null;
+    if (state.sourcePrompt) {
+      // 来源地址弹窗:Esc 关闭,输入框回车等同于「打开来源网页」。
+      if (event.key === "Escape" && !event.isComposing) {
+        event.preventDefault();
+        state.sourcePrompt = null;
         render();
+        return;
       }
+      if (event.key === "Enter" && !event.isComposing && event.target?.id === "source-url") {
+        event.preventDefault();
+        applySourceUrl();
+        return;
+      }
+    }
+    if (event.key === "Escape" && !state.busy) {
       if (state.equipPicker) {
         state.equipPicker = null;
-        render();
-      }
-      if (state.nexusFiles) {
+      } else if (state.nexusFiles) {
         state.nexusFiles = null;
-        render();
+      } else if (state.bundleOpenId != null) {
+        state.bundleOpenId = null;
+      } else {
+        return;
       }
+      render();
     }
   });
   render();
   setupDrop();
   try {
     await loadBootstrap();
+    void refreshNexusAccess();
     state.status = "就绪";
     state.statusError = false;
   } catch (error) {

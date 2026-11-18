@@ -26,7 +26,7 @@ desktop/                     Electron 37 + Vite + 原生 JS(无前端框架)
 - Electron(`desktop/electron/main.cjs`)启动时 spawn 后端:dev 用 `dotnet run --project src/mh-mod-manager.Host`,打包用 `resources/host/mh-mod-manager.Host.exe`;轮询 `/api/bootstrap` 就绪后加载 Vite UI。
 - **Host 所有 handler 在一个全局 `lock (gate)` 内执行**——后端单线程串行,不要假设可并发。
 - **变更端点出错也返回 HTTP 200**,错误承载在 DTO 的 `Status`(中文消息)+ `Error=true` 字段;仅 preview/文件夹缺失返回 404。前端依赖此约定。
-- 外链白名单:Electron `open-external` 只放行 `https://www.nexusmods.com/`。
+- 外链白名单:Electron `open-external` 只放行 http/https 绝对 URL(来源地址可为任意网页,Nexus 页面/作者发布页/caimogu 等;仍拒绝 `file:`、`javascript:` 等协议,前端对省略协议的输入自动补 `https://`)。
 - data 目录解析:Electron 便携版用 `PORTABLE_EXECUTABLE_DIR\data`;Host 侧优先级 `--data` 参数 > 环境变量 `MH_MOD_MANAGER_DATA` > 向上找 `MHSeries.ModManager.slnx` 取 `<仓库根>\data` > 兜底 exe 旁 `data`。
 
 ### 目录速查
@@ -96,6 +96,7 @@ dotnet test                                  # 跑全部测试(测试共享真�
 - `ModGroup`(`games/<appId>/groups.json`):默认组"未分组",孤儿 MOD 归入;Index 重排为 1..N 连续。
 - `AppSettings`(`settings.json`):LastGame(默认 Wilds)、CheckGameRunning(默认 true)、InstallOption(0 原位/1 复制到 downloads/2 移动)、NexusApiKey(明文)、GamePaths 按 SteamAppId 键。
 - `JsonUtil.Load` **捕获所有异常返回 fallback——损坏的 JSON 会被静默重置**,改动需谨慎。
+- 源压缩包归档:复制/移动模式(`InstallOption` 1/2)存 `downloads\<SteamAppId>\<ModId>\<名称><原扩展名>`——**每个 MOD 独占目录**,更新时整目录替换、不产生 `.bak`;Nexus 下载也落在同一目录(已存在不重复下载);原位模式(0)不动源文件。
 - 预览图:stem 为 screenshot/preview/cover* 且在 files 根的文件不算部署文件;MOD 封面统一存 `files\screenshot.<ext>`。
 - 游戏目录定位 `SteamLocator`:注册表卸载项 → Steam 库 VDF 枚举;有效性 = 目录存在且 `<dir>\<ExeName>` 存在。
 

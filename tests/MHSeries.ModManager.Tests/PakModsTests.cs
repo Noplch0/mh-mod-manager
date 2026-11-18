@@ -15,7 +15,7 @@ public sealed class PakModsTests : IDisposable
     public PakModsTests()
     {
         _game = new GameProfile(GameId.Rise, "rise-test", "rise", "rise", "rise.exe", _appId, "rise",
-            "re_chunk_000.pak.patch_", 1);
+            true);
         Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, _game.ExeName), "fake-game");
         _settings.Load();
@@ -173,7 +173,7 @@ public sealed class PakModsTests : IDisposable
     public void WorldGameIgnoresPakModsMode()
     {
         var worldAppId = _appId + 31;
-        var world = new GameProfile(GameId.World, "world-test", "world", "world", "world.exe", worldAppId, "w", "", 0);
+        var world = new GameProfile(GameId.World, "world-test", "world", "world", "world.exe", worldAppId, "w", false);
         var worldRoot = Path.Combine(_root, "world-game");
         Directory.CreateDirectory(worldRoot);
         File.WriteAllText(Path.Combine(worldRoot, world.ExeName), "fake-game");

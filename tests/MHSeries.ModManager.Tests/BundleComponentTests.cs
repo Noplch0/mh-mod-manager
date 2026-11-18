@@ -15,7 +15,7 @@ public sealed class BundleComponentTests : IDisposable
 
     public BundleComponentTests()
     {
-        _game = new GameProfile(GameId.World, "bundle-test", "test", "test", "test.exe", _appId, "test", "", 0);
+        _game = new GameProfile(GameId.World, "bundle-test", "test", "test", "test.exe", _appId, "test", false);
         Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, _game.ExeName), "fake-game");
         _settings.Load();
@@ -91,6 +91,29 @@ public sealed class BundleComponentTests : IDisposable
 
         _service.SetComponentEnabled(_game, mod, mod.Components[0].Id, true);
         Assert.Equal("alpha", File.ReadAllText(deployed));
+    }
+
+    [Fact]
+    public void ComponentEquipmentReplacementOnlyChangesSelectedComponentAndRedeploysNewPath()
+    {
+        const string source = "nativePC/pl/f_equip/pl001_0000/body/mod/f_body001_0000.mod3";
+        const string target = "nativepc/pl/f_equip/pl002_0000/body/mod/f_body002_0000.mod3";
+        var pack = Path.Combine(_root, "EquipmentPack");
+        WriteFile(pack, "Alpha/" + source, "alpha");
+        WriteFile(pack, "Beta/" + source, "beta");
+        var mod = Assert.Single(_service.Import(_game, pack).Mods);
+        var alpha = mod.Components[0];
+        var beta = mod.Components[1];
+
+        _service.ChangeEquipment(_game, mod, "FemaleArmor", 10_000, 20_000, false, false, beta.Id);
+
+        Assert.Equal($"c{alpha.Id}/{source}", Assert.Single(alpha.Files), ignoreCase: true);
+        Assert.Equal($"c{beta.Id}/{target}", Assert.Single(beta.Files), ignoreCase: true);
+        _service.SetComponentEnabled(_game, mod, alpha.Id, true);
+        _service.SetComponentEnabled(_game, mod, beta.Id, true);
+        _service.SetEnabled(_game, mod, true);
+        Assert.Equal("alpha", File.ReadAllText(Path.Combine(_root, source)));
+        Assert.Equal("beta", File.ReadAllText(Path.Combine(_root, target)));
     }
 
     [Fact]

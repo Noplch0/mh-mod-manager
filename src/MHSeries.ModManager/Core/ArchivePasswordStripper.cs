@@ -70,10 +70,6 @@ public static class ArchivePasswordStripper
     {
         var dest = Path.ChangeExtension(originalPath, ".zip");
         var sameTarget = Path.GetFullPath(dest).Equals(Path.GetFullPath(originalPath), StringComparison.OrdinalIgnoreCase);
-        if (!sameTarget && File.Exists(dest))
-        {
-            File.Move(dest, dest + ".bak", true);
-        }
 
         var temp = Path.Combine(AppPaths.TempDir, Guid.NewGuid().ToString("N") + ".zip");
         try

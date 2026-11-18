@@ -21,7 +21,7 @@ public sealed class ArchivePasswordTests : IDisposable
 
     public ArchivePasswordTests()
     {
-        _game = new GameProfile(GameId.World, "test", "test", "test", "test.exe", _appId, "test", "", 0);
+        _game = new GameProfile(GameId.World, "test", "test", "test", "test.exe", _appId, "test", false);
         Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, _game.ExeName), "fake-game");
         _settings.Load();
@@ -78,7 +78,7 @@ public sealed class ArchivePasswordTests : IDisposable
         var installed = _service.Import(_game, source, null, [Password]).Mods[0];
         TrackDownload(installed.SourceFile);
 
-        Assert.Equal(AppPaths.DownloadDir, Path.GetDirectoryName(installed.SourceFile));
+        Assert.Equal(AppPaths.ModDownloadDir(_appId, installed.Id), Path.GetDirectoryName(installed.SourceFile));
         Assert.Equal(".zip", Path.GetExtension(installed.SourceFile));
         Assert.False(ArchiveExtractor.IsEncrypted(installed.SourceFile));
         Assert.True(File.Exists(source));
@@ -126,7 +126,7 @@ public sealed class ArchivePasswordTests : IDisposable
         var installed = _service.Import(_game, source, null, [Password]).Mods[0];
         TrackDownload(installed.SourceFile);
 
-        Assert.Equal(Path.Combine(AppPaths.DownloadDir, stem + ".zip"), installed.SourceFile);
+        Assert.Equal(Path.Combine(AppPaths.ModDownloadDir(_appId, installed.Id), stem + ".zip"), installed.SourceFile);
         Assert.Equal(bytes, File.ReadAllBytes(installed.SourceFile));
     }
 
@@ -208,7 +208,6 @@ public sealed class ArchivePasswordTests : IDisposable
     private void TrackDownload(string file)
     {
         _downloads.Add(file);
-        _downloads.Add(file + ".bak");
     }
 
     public void Dispose()
@@ -229,6 +228,11 @@ public sealed class ArchivePasswordTests : IDisposable
         foreach (var file in _downloads)
         {
             TryDeleteFile(file);
+        }
+
+        if (Directory.Exists(AppPaths.DownloadGameDir(_appId)))
+        {
+            Directory.Delete(AppPaths.DownloadGameDir(_appId), true);
         }
     }
 

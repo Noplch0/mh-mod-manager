@@ -17,7 +17,7 @@ public sealed class NexusUpdateTests : IDisposable
 
     public NexusUpdateTests()
     {
-        _game = new GameProfile(GameId.World, "nexus-test", "test", "test", "test.exe", _appId, "monsterhunterworld", "", 0);
+        _game = new GameProfile(GameId.World, "nexus-test", "test", "test", "test.exe", _appId, "monsterhunterworld", false);
         Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, _game.ExeName), "fake-game");
         _settings.Load();
@@ -219,10 +219,10 @@ public sealed class NexusUpdateTests : IDisposable
 
     private void TrackDownloads()
     {
-        var dir = AppPaths.DownloadDir;
+        var dir = AppPaths.DownloadGameDir(_appId);
         if (Directory.Exists(dir))
         {
-            _downloads.AddRange(Directory.GetFiles(dir));
+            _downloads.AddRange(Directory.GetFiles(dir, "*", SearchOption.AllDirectories));
         }
     }
 
@@ -245,6 +245,11 @@ public sealed class NexusUpdateTests : IDisposable
             catch
             {
             }
+        }
+
+        if (Directory.Exists(AppPaths.DownloadGameDir(_appId)))
+        {
+            Directory.Delete(AppPaths.DownloadGameDir(_appId), true);
         }
 
         if (Directory.Exists(_root))

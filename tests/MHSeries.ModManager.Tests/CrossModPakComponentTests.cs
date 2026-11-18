@@ -16,7 +16,7 @@ public sealed class CrossModPakComponentTests : IDisposable
     public CrossModPakComponentTests()
     {
         _game = new GameProfile(GameId.Wilds, "crosspak", "test", "test", "test.exe", _appId, "test",
-            "re_chunk_000.pak.sub_000.pak.patch_", 6);
+            true);
         Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, _game.ExeName), "fake-game");
         _settings.Load();

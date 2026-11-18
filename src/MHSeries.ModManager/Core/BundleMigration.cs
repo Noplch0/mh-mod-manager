@@ -95,6 +95,9 @@ public static class BundleMigration
             {
                 Id = componentId,
                 Name = string.IsNullOrWhiteSpace(member.DisplayName) ? member.Name : member.DisplayName,
+                Version = member.Version,
+                Author = member.Author,
+                Category = member.Category,
                 Enabled = member.Enabled
             };
 

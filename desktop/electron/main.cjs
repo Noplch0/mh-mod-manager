@@ -123,8 +123,16 @@ ipcMain.handle("open-path", async (_event, folder) => {
 });
 
 ipcMain.handle("open-external", async (_event, url) => {
-  // 只放行 Nexus 站内链接，避免渲染层被诱导打开任意外部地址。
-  if (typeof url !== "string" || !/^https:\/\/www\.nexusmods\.com\//i.test(url)) {
+  // 来源地址可以是任意网页（Nexus、发布页等）：只放行 http/https，
+  // 避免渲染层被诱导打开本地文件或任意协议。
+  if (typeof url !== "string") return "已阻止外部链接";
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "已阻止外部链接";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return "已阻止外部链接";
   }
   return shell.openExternal(url);

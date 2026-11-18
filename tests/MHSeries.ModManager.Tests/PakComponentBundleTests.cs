@@ -16,7 +16,7 @@ public sealed class PakComponentBundleTests : IDisposable
     public PakComponentBundleTests()
     {
         _game = new GameProfile(GameId.Rise, "pak-bundle-test", "rise", "rise", "rise.exe", _appId, "rise",
-            "re_chunk_000.pak.patch_", 1);
+            true);
         Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, _game.ExeName), "fake-game");
         _settings.Load();

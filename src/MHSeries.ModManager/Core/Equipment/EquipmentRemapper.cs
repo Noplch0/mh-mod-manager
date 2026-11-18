@@ -2,204 +2,163 @@ using MhModManager.Models;
 
 namespace MhModManager.Core.Equipment;
 
-/// <summary>
-/// 原版 ChangeModelTask：禁用状态下把 MOD 文件（含 PAK 内部路径）改写到另一套装备。
-/// </summary>
+public sealed class EquipmentConflictException(IReadOnlyList<string> paths)
+    : InvalidOperationException("目标装备文件已存在或多个文件将写入同一位置，未修改 MOD 文件。")
+{
+    public IReadOnlyList<string> Paths { get; } = paths;
+}
+
 internal static class EquipmentRemapper
 {
-    public static int Apply(
-        GameId game,
-        string filesDir,
-        IEnumerable<string> relativeFiles,
-        EquipKind kind,
-        int fromId,
-        int toId,
-        bool isPfb,
-        bool withTex)
-    {
-        if (!Directory.Exists(filesDir))
-        {
-            return 0;
-        }
+    private sealed record Edit(string Source, string Destination, string? Replacement, string Backup);
 
+    public static int Apply(GameId game, string filesDir, IEnumerable<string> relativeFiles,
+        EquipKind kind, int fromId, int toId, bool isPfb, bool withTex) =>
+        Apply(game, filesDir, [("", relativeFiles)], kind, fromId, toId, isPfb, withTex);
+
+    public static int Apply(GameId game, string filesDir, IEnumerable<(string Prefix, IEnumerable<string> Files)> units,
+        EquipKind kind, int fromId, int toId, bool isPfb, bool withTex, Action? save = null)
+    {
+        if (!Directory.Exists(filesDir)) return 0;
+
+        var working = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(filesDir))!, $".remap-{Guid.NewGuid():N}");
+        var edits = new List<Edit>();
+        var moved = new List<Edit>();
+        var installed = new List<Edit>();
+        var createdDirs = new List<string>();
+        var keepWorking = false;
         var changed = 0;
-        var moves = new List<(string Source, string Dest)>();
-        foreach (var relative in relativeFiles)
-        {
-            var source = Path.Combine(filesDir, relative.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(source))
-            {
-                continue;
-            }
-
-            if (IsPakPatch(relative) && game != GameId.World)
-            {
-                changed += PakReader.RewritePaths(source, PakFileIndex.For(game), path =>
-                    MapInternal(game, kind, fromId, toId, isPfb, withTex, path),
-                    path => AvpContentFor(game, kind, fromId, toId, path));
-                continue;
-            }
-
-            if (!ShouldRewrite(relative, isPfb, withTex))
-            {
-                continue;
-            }
-
-            if (!EquipmentPathRewriter.TryRewrite(game, kind, fromId, toId, relative, out var destRelative)
-                || destRelative.Equals(relative, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var dest = Path.Combine(filesDir, destRelative.Replace('/', Path.DirectorySeparatorChar));
-            moves.Add((source, dest));
-            if (AvpPatcher.IsAvpFile(destRelative)
-                && AvpPatcher.Build(game, kind, toId) is { } avpBytes)
-            {
-                // 内容先按目标 ID 重写，再随 moves 一起改名；否则改了名游戏内仍指向旧装备。
-                File.WriteAllBytes(source, avpBytes);
-                changed++;
-            }
-        }
-
-        if (moves.Count > 0)
-        {
-            changed += MoveFiles(moves);
-        }
-
-        DeleteEmptyDirectories(filesDir);
-        return changed;
-    }
-
-    private static string? MapInternal(
-        GameId game,
-        EquipKind kind,
-        int fromId,
-        int toId,
-        bool isPfb,
-        bool withTex,
-        string path)
-    {
-        if (!ShouldRewrite(path, isPfb, withTex))
-        {
-            return null;
-        }
-
-        return EquipmentPathRewriter.TryRewrite(game, kind, fromId, toId, path, out var next)
-            ? next
-            : null;
-    }
-
-    private static byte[]? AvpContentFor(GameId game, EquipKind kind, int fromId, int toId, string path)
-    {
-        if (!AvpPatcher.IsAvpFile(path))
-        {
-            return null;
-        }
-
-        var normalized = EquipmentResolver.Normalize(path.Replace('\\', '/').ToLowerInvariant());
-        if (!EquipmentResolver.TryParse(game, normalized, out var parsedKind, out var parsedId, out _)
-            || parsedKind != kind || parsedId != fromId)
-        {
-            return null;
-        }
-
-        return AvpPatcher.Build(game, kind, toId);
-    }
-
-    private static bool ShouldRewrite(string path, bool isPfb, bool withTex)
-    {
-        var name = Path.GetFileName(path);
-        var pfb = name.Contains(".pfb.", StringComparison.OrdinalIgnoreCase)
-                  || name.EndsWith(".pfb", StringComparison.OrdinalIgnoreCase);
-        if (pfb != isPfb)
-        {
-            return false;
-        }
-
-        var tex = name.Contains(".tex.", StringComparison.OrdinalIgnoreCase)
-                  || name.EndsWith(".tex", StringComparison.OrdinalIgnoreCase);
-        return withTex || !tex;
-    }
-
-    private static bool IsPakPatch(string path)
-    {
-        var normalized = path.Replace('\\', '/');
-        return normalized.EndsWith(".pak", StringComparison.OrdinalIgnoreCase) && !normalized.Contains('/');
-    }
-
-    private static int MoveFiles(List<(string Source, string Dest)> moves)
-    {
-        var staged = new List<(string Temp, string Dest)>();
         try
         {
-            foreach (var (source, dest) in moves)
+            foreach (var (prefix, files) in units)
+            foreach (var relative in files.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                if (source.Equals(dest, StringComparison.OrdinalIgnoreCase))
+                var source = FullPath(prefix + relative);
+                if (!File.Exists(source)) continue;
+                var backup = Path.Combine(working, $"{edits.Count}.original");
+                var replacement = Path.Combine(working, $"{edits.Count}.replacement");
+                if (game != GameId.World && ModLayoutParser.IsPakFile(relative))
                 {
-                    continue;
-                }
+                    if (!PakReader.CanInspect(source)) continue;
+                    Directory.CreateDirectory(working);
+                    File.Copy(source, replacement);
+                    int rewritten;
+                    try
+                    {
+                        rewritten = PakReader.RewritePaths(replacement, PakFileIndex.For(game), Map,
+                            path => Map(path) is { } target ? BuildAvp(target) : null, requireContentPatch: true);
+                    }
+                    catch (EquipmentConflictException ex)
+                    {
+                        throw new EquipmentConflictException(ex.Paths.Select(path => $"{prefix}{relative} → {path}").ToList());
+                    }
 
-                var temp = source + ".hf-remap-" + Guid.NewGuid().ToString("N");
-                Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
-                File.Move(source, temp);
-                staged.Add((temp, dest));
+                    if (rewritten == 0)
+                    {
+                        File.Delete(replacement);
+                        continue;
+                    }
+
+                    edits.Add(new Edit(source, source, replacement, backup));
+                    changed += rewritten;
+                }
+                else if (Map(relative) is { } target)
+                {
+                    var payload = BuildAvp(target);
+                    if (payload is not null)
+                    {
+                        Directory.CreateDirectory(working);
+                        File.WriteAllBytes(replacement, payload);
+                    }
+
+                    edits.Add(new Edit(source, FullPath(prefix + target), payload is null ? null : replacement, backup));
+                    changed += payload is null ? 1 : 2;
+                }
             }
 
-            foreach (var (temp, dest) in staged)
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                if (File.Exists(dest))
-                {
-                    File.Delete(dest);
-                }
+            var sources = edits.Select(edit => edit.Source).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var destinations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var collisions = edits.Where(edit => !destinations.Add(edit.Destination)
+                    || (File.Exists(edit.Destination) && !sources.Contains(edit.Destination))
+                    || Directory.Exists(edit.Destination))
+                .Select(edit => Path.GetRelativePath(filesDir, edit.Destination)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (collisions.Count > 0) throw new EquipmentConflictException(collisions);
+            if (changed == 0) return 0;
 
-                File.Move(temp, dest);
+            Directory.CreateDirectory(working);
+            foreach (var edit in edits)
+            {
+                File.Move(edit.Source, edit.Backup);
+                moved.Add(edit);
             }
 
-            return staged.Count;
+            foreach (var edit in edits)
+            {
+                EnsureDestination(Path.GetDirectoryName(edit.Destination)!);
+                File.Move(edit.Replacement ?? edit.Backup, edit.Destination);
+                installed.Add(edit);
+            }
+
+            save?.Invoke();
+            return changed;
         }
         catch
         {
-            foreach (var (temp, dest) in staged)
+            try
             {
-                try
-                {
-                    if (File.Exists(temp) && !File.Exists(dest))
-                    {
-                        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                        File.Move(temp, dest);
-                    }
-                }
-                catch
-                {
-                }
+                // Vacate every destination before restoring sources (a source can also be a destination).
+                foreach (var edit in installed.AsEnumerable().Reverse())
+                    File.Move(edit.Destination, edit.Replacement ?? edit.Backup);
+                foreach (var edit in moved.AsEnumerable().Reverse())
+                    File.Move(edit.Backup, edit.Source);
+                foreach (var dir in createdDirs.AsEnumerable().Reverse())
+                    if (!Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
+            }
+            catch (Exception ex)
+            {
+                keepWorking = true;
+                throw new IOException($"装备替换失败，且无法完整回滚。请保留恢复目录：{working}", ex);
             }
 
             throw;
         }
-    }
-
-    private static void DeleteEmptyDirectories(string root)
-    {
-        if (!Directory.Exists(root))
+        finally
         {
-            return;
-        }
-
-        foreach (var dir in Directory.GetDirectories(root, "*", SearchOption.AllDirectories)
-                     .OrderByDescending(item => item.Length))
-        {
-            try
+            if (!keepWorking && Directory.Exists(working))
             {
-                if (Directory.Exists(dir) && Directory.GetFileSystemEntries(dir).Length == 0)
-                {
-                    Directory.Delete(dir);
-                }
-            }
-            catch
-            {
+                try { Directory.Delete(working, true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
             }
         }
+
+        string FullPath(string path) => ModLayoutParser.IsSafeStoredPath(path)
+            ? Path.Combine(filesDir, path.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar))
+            : throw new InvalidOperationException($"不安全的 MOD 文件路径：{path}");
+
+        void EnsureDestination(string dir)
+        {
+            if (Directory.Exists(dir)) return;
+            EnsureDestination(Path.GetDirectoryName(dir)!);
+            Directory.CreateDirectory(dir);
+            createdDirs.Add(dir);
+        }
+
+        string? Map(string path)
+        {
+            var normalized = EquipmentResolver.Normalize(path);
+            var pfb = EquipmentResolver.TryParse(game, normalized, out _, out _, out var parsedPfb) && parsedPfb;
+            var name = Path.GetFileName(normalized);
+            var tex = name.Contains(".tex.", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".tex", StringComparison.OrdinalIgnoreCase);
+            // Armor model swaps also carry their AVP; an AVP shown as a prefab can be swapped on its own.
+            var armorAvp = game == GameId.Wilds && EquipKindInfo.IsArmor(kind) && AvpPatcher.IsAvpFile(path);
+            if ((pfb != isPfb && !armorAvp) || (!withTex && tex)) return null;
+            return EquipmentPathRewriter.TryRewrite(game, kind, fromId, toId, path, out var next)
+                && !next.Equals(path, StringComparison.OrdinalIgnoreCase) ? next : null;
+        }
+
+        byte[]? BuildAvp(string path) => game == GameId.Wilds && EquipKindInfo.IsArmor(kind) && AvpPatcher.IsAvpFile(path)
+            ? AvpPatcher.Build(game, kind, toId) ?? throw new InvalidOperationException("缺少防具 AVP 模板，未修改 MOD 文件。")
+            : null;
     }
 }

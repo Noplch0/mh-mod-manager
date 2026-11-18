@@ -57,7 +57,7 @@ public static class ModLayoutParser
                 continue;
             }
 
-            var isUnmappedPak = game.UsesPakPatches && IsPakFile(item.RelativeDest);
+            var isUnmappedPak = game.UsesPakMods && IsPakFile(item.RelativeDest);
             if (!IsSafeStoredPath(item.RelativeDest) ||
                 (!isUnmappedPak && !IsSafeDeploymentPath(game, item.RelativeDest)))
             {
@@ -146,10 +146,9 @@ public static class ModLayoutParser
             return true;
         }
 
-        return (path.StartsWith(game.PakPrefix, StringComparison.OrdinalIgnoreCase)
-                && path.EndsWith(".pak", StringComparison.OrdinalIgnoreCase)
-                && !path.Contains('/'))
-               || !path.Contains('/');
+        // 根级散文件（pak、加载器 dll、以及历史记录里待清理的杂项）一律放行；
+        // "不允许落根"的过滤由 IsRootJunk 负责，部署与清理走同一判定才删得干净。
+        return !path.Contains('/');
     }
 
     public static bool IsSafeStoredPath(string relative)

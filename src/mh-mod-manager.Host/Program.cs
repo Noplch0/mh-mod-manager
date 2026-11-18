@@ -99,6 +99,64 @@ app.MapPut("/api/settings", (SettingsRequest body) =>
     }
 });
 
+app.MapPut("/api/settings/appearance", (AppearanceSettings body) =>
+{
+    lock (gate)
+    {
+        var previous = settings.Current.Appearance;
+        try
+        {
+            var appearance = body.Normalize();
+            settings.Current.Appearance = appearance;
+            settings.Save();
+            return Results.Json(new { appearance });
+        }
+        catch (Exception ex)
+        {
+            settings.Current.Appearance = previous;
+            return Results.Json(new { error = true, status = ex.Message });
+        }
+    }
+});
+
+app.MapGet("/api/settings/appearance/image", () =>
+{
+    lock (gate) return AppearanceBackground.Read();
+});
+
+app.MapPut("/api/settings/appearance/image", (BackgroundImageRequest body) =>
+{
+    lock (gate)
+    {
+        try
+        {
+            if (body.Image is not { Length: > 0 }) throw new InvalidDataException("未提供背景图片。");
+            AppearanceBackground.Replace(body.Image);
+            return Results.Json(new { backgroundRevision = AppearanceBackground.Revision });
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new { error = true, status = ex.Message });
+        }
+    }
+});
+
+app.MapDelete("/api/settings/appearance/image", () =>
+{
+    lock (gate)
+    {
+        try
+        {
+            AppearanceBackground.Remove();
+            return Results.Json(new { backgroundRevision = AppearanceBackground.Revision });
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new { error = true, status = ex.Message });
+        }
+    }
+});
+
 app.MapPost("/api/nexus/validate", (CancellationToken cancellation) =>
 {
     lock (gate)
@@ -213,7 +271,8 @@ app.MapPost("/api/games/{gameId}/import", (GameId gameId, ImportRequest body) =>
             }
         }
 
-        var workspace = ApiMapper.Workspace(service, settings, gameId);
+        // Imports start disabled and cannot change the deployed winner.
+        var workspace = ApiMapper.Workspace(service, settings, gameId, includeDeploymentConflicts: false);
         if (passwordFile is not null)
         {
             workspace.NeedPassword = true;
@@ -248,11 +307,33 @@ app.MapPost("/api/games/{gameId}/mods/{modId}/move", (GameId gameId, int modId, 
         return "MOD 优先级已更新";
     }));
 
-app.MapPatch("/api/games/{gameId}/mods/{modId}", (GameId gameId, int modId, NameRequest body) =>
+app.MapPatch("/api/games/{gameId}/mods/{modId}", (GameId gameId, int modId, ModPatchRequest body) =>
     Mutate(gameId, service, settings, gate, game =>
     {
-        service.RenameMod(game, RequireMod(service, game, modId), body.Name ?? "");
-        return "MOD 已重命名";
+        var mod = RequireMod(service, game, modId);
+        var renamed = body.Name is not null;
+        var sourced = body.HomeUrl is not null;
+        if (!renamed && !sourced)
+        {
+            return "没有要更新的内容";
+        }
+
+        if (renamed)
+        {
+            service.RenameMod(game, mod, body.Name!);
+        }
+
+        if (sourced)
+        {
+            service.SetHomeUrl(game, mod, body.HomeUrl);
+        }
+
+        return (renamed, sourced) switch
+        {
+            (true, false) => "MOD 已重命名",
+            (false, true) => "已保存来源地址",
+            _ => "MOD 已更新"
+        };
     }));
 
 app.MapPost("/api/games/{gameId}/mods/{modId}/update", (GameId gameId, int modId, ImportRequest body) =>
@@ -396,7 +477,7 @@ app.MapGet("/api/games/{gameId}/mods/{modId}/preview", (GameId gameId, int modId
     }
 });
 
-app.MapGet("/api/games/{gameId}/equipment", (GameId gameId, string? kind) =>
+app.MapGet("/api/games/{gameId}/equipment", (GameId gameId, string? kind, int? excludeMod) =>
 {
     lock (gate)
     {
@@ -405,6 +486,7 @@ app.MapGet("/api/games/{gameId}/equipment", (GameId gameId, string? kind) =>
         var used = new HashSet<(string Kind, int Id)>();
         foreach (var mod in service.GetMods(game))
         {
+            if (mod.Id == excludeMod) continue;
             var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
             var resolved = mod.IsBundle
                 ? mod.Components.SelectMany(component =>
@@ -440,18 +522,21 @@ app.MapGet("/api/games/{gameId}/equipment", (GameId gameId, string? kind) =>
 app.MapPost("/api/games/{gameId}/mods/{modId}/equipment", (GameId gameId, int modId, ChangeEquipmentRequest body) =>
     Mutate(gameId, service, settings, gate, game =>
     {
-        service.ChangeEquipment(game, RequireMod(service, game, modId), body.Kind ?? "", body.FromId, body.ToId, body.IsPfb, body.WithTex);
+        service.ChangeEquipment(game, RequireMod(service, game, modId), body.Kind ?? "", body.FromId, body.ToId, body.IsPfb, body.WithTex, body.ComponentId);
         var name = EquipmentLookup.DisplayName(body.Kind ?? "", body.ToId, gameId);
         return string.IsNullOrWhiteSpace(name) ? "已修改对应装备" : $"已将对应装备改为 {name}";
     }));
 
-app.MapGet("/api/games/{gameId}/mods/{modId}/folder", (GameId gameId, int modId) =>
+app.MapGet("/api/games/{gameId}/mods/{modId}/folder", (GameId gameId, int modId, int? component) =>
 {
     lock (gate)
     {
         var game = GameProfile.Get(gameId);
-        var mod = RequireMod(service, game, modId);
+        var mod = service.GetMods(game).FirstOrDefault(item => item.Id == modId);
+        if (mod is null || (component is not null && !mod.Components.Any(item => item.Id == component)))
+            return Results.NotFound();
         var path = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
+        if (component is not null) path = Path.Combine(path, $"c{component}");
         return Directory.Exists(path)
             ? Results.Json(new { path })
             : Results.NotFound();
@@ -478,6 +563,14 @@ static IResult Mutate(GameId gameId, ModService service, SettingsStore settings,
             workspace.Status = ex.Message;
             workspace.Error = true;
             workspace.NeedPassword = true;
+            return Results.Json(workspace);
+        }
+        catch (EquipmentConflictException ex)
+        {
+            var workspace = ApiMapper.Workspace(service, settings, gameId);
+            workspace.Status = ex.Message;
+            workspace.Error = true;
+            workspace.EquipmentConflicts = ex.Paths;
             return Results.Json(workspace);
         }
         catch (Exception ex)
@@ -553,6 +646,7 @@ static string ResolveDataRoot(string[] args)
 
 internal sealed record PathRequest(string? Path);
 internal sealed record SettingsRequest(bool CheckGameRunning, int InstallOption, string? NexusApiKey = null);
+internal sealed record BackgroundImageRequest(byte[]? Image);
 
 internal sealed record NexusDownloadRequest(long FileId, List<string>? Passwords = null);
 
@@ -583,6 +677,7 @@ internal sealed record EnableRequest(bool Enabled);
 internal sealed record DeltaRequest(int Delta);
 internal sealed record GroupIdRequest(int GroupId);
 internal sealed record NameRequest(string? Name);
+internal sealed record ModPatchRequest(string? Name, string? HomeUrl);
 internal sealed record GroupPatch(string? Name, bool? Collapsed);
 internal sealed record ModIdsRequest(List<int>? ModIds);
-internal sealed record ChangeEquipmentRequest(string? Kind, int FromId, int ToId, bool IsPfb, bool WithTex);
+internal sealed record ChangeEquipmentRequest(string? Kind, int FromId, int ToId, bool IsPfb, bool WithTex, int? ComponentId);

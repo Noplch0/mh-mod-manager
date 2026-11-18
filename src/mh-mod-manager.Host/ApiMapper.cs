@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text.Json.Serialization;
 using MhModManager.Core;
 using MhModManager.Core.Equipment;
 using MhModManager.Models;
@@ -19,7 +21,7 @@ internal static class ApiMapper
         };
     }
 
-    public static WorkspaceDto Workspace(ModService service, SettingsStore settings, GameId gameId)
+    public static WorkspaceDto Workspace(ModService service, SettingsStore settings, GameId gameId, bool includeDeploymentConflicts = true)
     {
         var game = GameProfile.Get(gameId);
         var groups = service.GetGroups(game).OrderBy(group => group.Index).ToList();
@@ -28,6 +30,7 @@ internal static class ApiMapper
         {
             Game = MapGame(service, game),
             Settings = MapSettings(settings.Current),
+            DeploymentConflicts = includeDeploymentConflicts ? service.GetDeploymentConflicts(game) : null,
             Groups = groups.Select(group => MapGroup(group, mods)).ToList(),
             Mods = mods
                 .OrderBy(mod => groups.FindIndex(group => group.Id == mod.GroupId))
@@ -50,9 +53,9 @@ internal static class ApiMapper
             ExeName = profile.ExeName,
             Path = string.IsNullOrWhiteSpace(path) ? "" : path,
             Installed = installed,
-            UsesPakPatches = profile.UsesPakPatches,
+            UsesPakMods = profile.UsesPakMods,
             DeployRoot = profile.Id == GameId.World ? "nativePC" : "natives / reframework",
-            PakState = profile.UsesPakPatches ? "PAK 部署到 pak_mods 文件夹" : "nativePC 文件覆盖模式"
+            PakState = profile.UsesPakMods ? "PAK 部署到 pak_mods 文件夹" : "nativePC 文件覆盖模式"
         };
     }
 
@@ -61,7 +64,9 @@ internal static class ApiMapper
         LastGame = settings.LastGame,
         CheckGameRunning = settings.CheckGameRunning,
         InstallOption = settings.InstallOption,
-        NexusApiKey = settings.NexusApiKey
+        NexusApiKey = settings.NexusApiKey,
+        Appearance = (settings.Appearance ?? new()).Normalize(),
+        BackgroundRevision = AppearanceBackground.Revision
     };
 
     private static GroupDto MapGroup(ModGroup group, IEnumerable<ModRecord> mods)
@@ -97,12 +102,6 @@ internal static class ApiMapper
     {
         var preview = service.PreviewPath(game, mod);
         var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
-        var equipment = ResolveEquipment(service, game, mod, filesDir);
-        var covers = new Dictionary<int, string>();
-        foreach (var component in mod.Components)
-        {
-            covers[component.Id] = service.ComponentPreviewPath(game, mod, component.Id);
-        }
 
         return new ModDto
         {
@@ -122,49 +121,61 @@ internal static class ApiMapper
             InstalledAt = mod.InstallTime == default ? "未知时间" : mod.InstallTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm"),
             GroupName = groups.FirstOrDefault(group => group.Id == mod.GroupId)?.Name ?? "未分组",
             IsBundle = mod.IsBundle,
-            Components = mod.Components.Select(component => new ComponentDto
-            {
-                Id = component.Id,
-                Name = component.Name,
-                Enabled = component.Enabled,
-                FileCount = component.Files.Count,
-                HasPreview = !string.IsNullOrWhiteSpace(covers.GetValueOrDefault(component.Id)),
-                PreviewUrl = covers.TryGetValue(component.Id, out var cover) && !string.IsNullOrWhiteSpace(cover)
-                    ? $"/api/games/{game.Id}/mods/{mod.Id}/preview?component={component.Id}&t={mod.InstallTime.ToUnixTimeSeconds()}"
-                    : ""
-            }).ToList(),
-            Equipment = equipment.Select(item => new EquipmentDto
-            {
-                Kind = item.Kind,
-                Id = item.Id,
-                Type = item.Type,
-                Name = item.Name,
-                IsPfb = item.IsPfb,
-                IsPak = item.IsPak,
-                FileCount = item.FileCount,
-                Display = item.Display
-            }).ToList()
+            Components = mod.Components.Select(component => MapComponent(service, game, mod, component, filesDir, preview)).ToList(),
+            Equipment = mod.IsBundle ? [] : MapEquipment(EquipmentResolver.Resolve(game.Id, mod.Files, filesDir))
         };
     }
 
-    /// <summary>组件化记录按组件目录逐个解析装备（组件内路径不带前缀），普通记录原样解析。</summary>
-    private static List<EquipmentMatch> ResolveEquipment(ModService service, GameProfile game, ModRecord mod, string filesDir)
+    private static ComponentDto MapComponent(ModService service, GameProfile game, ModRecord mod,
+        ModComponent component, string filesDir, string parentCover)
     {
-        if (!mod.IsBundle)
+        var prefix = $"c{component.Id}/";
+        var files = component.Files.Where(file => file.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(file => file[prefix.Length..]);
+        var cover = service.ComponentPreviewPath(game, mod, component.Id);
+        var hasPreview = !string.IsNullOrWhiteSpace(cover) && !SameCover(cover, parentCover);
+        return new ComponentDto
         {
-            return EquipmentResolver.Resolve(game.Id, mod.Files, Directory.Exists(filesDir) ? filesDir : null).ToList();
-        }
-
-        return mod.Components.SelectMany(component =>
-        {
-            var prefix = $"c{component.Id}/";
-            var baseDir = Path.Combine(filesDir, prefix);
-            var files = component.Files
-                .Where(file => file.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                .Select(file => file[prefix.Length..]);
-            return EquipmentResolver.Resolve(game.Id, files, Directory.Exists(baseDir) ? baseDir : null);
-        }).ToList();
+            Id = component.Id,
+            Name = component.Name,
+            Version = DistinctMetadata(component.Version, mod.Version, FormatVersion),
+            Author = DistinctMetadata(component.Author, mod.Author),
+            Category = DistinctMetadata(component.Category, mod.Category),
+            Enabled = component.Enabled,
+            FileCount = component.Files.Count,
+            HasPreview = hasPreview,
+            PreviewUrl = hasPreview ? $"/api/games/{game.Id}/mods/{mod.Id}/preview?component={component.Id}&t={mod.InstallTime.ToUnixTimeSeconds()}" : "",
+            Equipment = MapEquipment(EquipmentResolver.Resolve(game.Id, files, Path.Combine(filesDir, prefix)))
+        };
     }
+
+    private static string DistinctMetadata(string value, string parent, Func<string, string>? format = null)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "";
+        var actual = format?.Invoke(value) ?? value.Trim();
+        var inherited = format?.Invoke(parent) ?? parent.Trim();
+        return actual.Equals(inherited, StringComparison.OrdinalIgnoreCase) ? "" : actual;
+    }
+
+    private static bool SameCover(string cover, string parent)
+    {
+        if (string.IsNullOrWhiteSpace(parent)) return false;
+        if (string.Equals(cover, parent, StringComparison.OrdinalIgnoreCase)) return true;
+        try
+        {
+            using var left = File.OpenRead(cover);
+            using var right = File.OpenRead(parent);
+            return left.Length == right.Length && SHA256.HashData(left).AsSpan().SequenceEqual(SHA256.HashData(right));
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    private static List<EquipmentDto> MapEquipment(IEnumerable<EquipmentMatch> items) => items.Select(item => new EquipmentDto
+        {
+            Kind = item.Kind, Id = item.Id, Type = item.Type, Name = item.Name, IsPfb = item.IsPfb,
+            IsPak = item.IsPak, FileCount = item.FileCount, Display = item.Display
+        }).ToList();
 }
 
 internal sealed class BootstrapDto
@@ -182,6 +193,9 @@ internal sealed class WorkspaceDto
     public SettingsDto Settings { get; set; } = new();
     public List<GroupDto> Groups { get; set; } = [];
     public List<ModDto> Mods { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<DeploymentConflict>? DeploymentConflicts { get; set; }
+    public IReadOnlyList<string>? EquipmentConflicts { get; set; }
     public string Status { get; set; } = "就绪";
     public bool Error { get; set; }
 
@@ -204,7 +218,7 @@ internal sealed class GameDto
     public string ExeName { get; set; } = "";
     public string Path { get; set; } = "";
     public bool Installed { get; set; }
-    public bool UsesPakPatches { get; set; }
+    public bool UsesPakMods { get; set; }
     public string DeployRoot { get; set; } = "";
     public string PakState { get; set; } = "";
 }
@@ -215,6 +229,8 @@ internal sealed class SettingsDto
     public bool CheckGameRunning { get; set; }
     public int InstallOption { get; set; }
     public string NexusApiKey { get; set; } = "";
+    public AppearanceSettings Appearance { get; set; } = new();
+    public string? BackgroundRevision { get; set; }
 }
 
 internal sealed class GroupDto
@@ -254,10 +270,14 @@ internal sealed class ComponentDto
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
+    public string Version { get; set; } = "";
+    public string Author { get; set; } = "";
+    public string Category { get; set; } = "";
     public bool Enabled { get; set; }
     public int FileCount { get; set; }
     public bool HasPreview { get; set; }
     public string PreviewUrl { get; set; } = "";
+    public List<EquipmentDto> Equipment { get; set; } = [];
 }
 
 internal sealed class EquipmentDto

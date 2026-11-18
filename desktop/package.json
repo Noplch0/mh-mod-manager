@@ -60,5 +60,8 @@
         }
       ]
     }
+  },
+  "dependencies": {
+    "lucide-static": "0.468.0"
   }
 }

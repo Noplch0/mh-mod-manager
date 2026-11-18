@@ -38,7 +38,7 @@ public static class PakModsManager
     /// <summary>让磁盘文件与映射跟当前启用列表、名称保持一致。幂等。</summary>
     public static void Sync(GameProfile game, string gamePath, List<ModRecord> mods, IReadOnlyList<ModGroup> groups)
     {
-        if (!game.UsesPakPatches || !Directory.Exists(gamePath))
+        if (!game.UsesPakMods || !Directory.Exists(gamePath))
         {
             return;
         }
@@ -120,7 +120,7 @@ public static class PakModsManager
     /// <summary>启用 MOD 后按列表顺序重排全部 X 编号。</summary>
     public static void AssignForEnable(GameProfile game, string gamePath, List<ModRecord> mods, IReadOnlyList<ModGroup> groups)
     {
-        if (!game.UsesPakPatches)
+        if (!game.UsesPakMods)
         {
             return;
         }

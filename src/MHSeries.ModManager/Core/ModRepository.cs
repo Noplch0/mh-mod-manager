@@ -97,6 +97,28 @@ public static class ModRepository
         JsonUtil.Save(Path.Combine(dir, "info.json"), mod);
     }
 
+    public static void SaveAtomically(GameProfile game, ModRecord mod)
+    {
+        var dir = AppPaths.ModDir(game.SteamAppId, mod.Id);
+        var temp = Path.Combine(dir, $".info-{Guid.NewGuid():N}.tmp");
+        try
+        {
+            JsonUtil.Save(temp, mod);
+            File.Move(temp, Path.Combine(dir, "info.json"), overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temp)) TryDeleteFile(temp);
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { File.Delete(path); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
     public static void Delete(GameProfile game, ModRecord mod)
     {
         var dir = AppPaths.ModDir(game.SteamAppId, mod.Id);
@@ -109,13 +131,9 @@ public static class ModRepository
     public static void RefreshFiles(GameProfile game, ModRecord mod)
     {
         var filesDir = AppPaths.ModFilesDir(game.SteamAppId, mod.Id);
-        mod.Files.Clear();
-        if (!Directory.Exists(filesDir))
-        {
-            return;
-        }
+        var actual = new List<string>();
 
-        foreach (var file in Directory.GetFiles(filesDir, "*", SearchOption.AllDirectories))
+        foreach (var file in Directory.Exists(filesDir) ? Directory.GetFiles(filesDir, "*", SearchOption.AllDirectories) : [])
         {
             var name = Path.GetFileName(file);
             if (IsPreviewFileName(name) && Path.GetDirectoryName(file) == filesDir)
@@ -123,13 +141,18 @@ public static class ModRepository
                 continue;
             }
 
-            mod.Files.Add(Path.GetRelativePath(filesDir, file).Replace('\\', '/'));
+            actual.Add(Path.GetRelativePath(filesDir, file).Replace('\\', '/'));
         }
 
-        // 组件化记录：组件文件列表对账到磁盘实际存在的内容。
+        mod.Files = actual;
+        // Preserve order for unchanged entries and include newly renamed files.
+        var byPrefix = actual.ToLookup(file => file.Split('/', 2)[0], StringComparer.OrdinalIgnoreCase);
         foreach (var component in mod.Components)
         {
-            component.Files.RemoveAll(file => !mod.Files.Contains(file, StringComparer.OrdinalIgnoreCase));
+            var present = byPrefix[$"c{component.Id}"].ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var kept = component.Files.Where(present.Remove).ToList();
+            kept.AddRange(present);
+            component.Files = kept;
         }
     }
 

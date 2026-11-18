@@ -14,7 +14,7 @@ public sealed class ModServiceTests : IDisposable
 
     public ModServiceTests()
     {
-        _game = new GameProfile(GameId.World, "test", "test", "test", "test.exe", _appId, "test", "", 0);
+        _game = new GameProfile(GameId.World, "test", "test", "test", "test.exe", _appId, "test", false);
         Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, _game.ExeName), "fake-game");
         _settings.Load();
@@ -220,7 +220,7 @@ public sealed class ModServiceTests : IDisposable
     {
         var pakAppId = _appId + 17;
         var wilds = new GameProfile(GameId.Wilds, "wilds", "w", "w", "wilds.exe", pakAppId, "w",
-            "re_chunk_000.pak.sub_000.pak.patch_", 6);
+            true);
         _settings.SetGamePath(wilds, _root);
         File.WriteAllText(Path.Combine(_root, wilds.ExeName), "fake-game");
         var staging = CreateStaging("pak-mod");
@@ -423,6 +423,25 @@ public sealed class ModServiceTests : IDisposable
         var fallback = _service.GetGroups(_game).First(item => item.IsDefault);
         Assert.Equal(fallback.Id, mod.GroupId);
         Assert.DoesNotContain(_service.GetGroups(_game), item => item.Id == group.Id);
+    }
+
+    [Fact]
+    public void SourceHomeUrlCanBeSetAndClearedAndRejectsNonHttpLinks()
+    {
+        var mod = _service.Install(_game, CreateParsed("source-mod", "data"));
+
+        _service.SetHomeUrl(_game, mod, " https://www.nexusmods.com/monsterhunterworld/mods/42 ");
+
+        Assert.Equal("https://www.nexusmods.com/monsterhunterworld/mods/42", mod.HomeUrl);
+        _service.Invalidate(_game);
+        var reloaded = _service.GetMods(_game).Single(item => item.Id == mod.Id);
+        Assert.Equal("https://www.nexusmods.com/monsterhunterworld/mods/42", reloaded.HomeUrl);
+
+        var invalid = Assert.Throws<InvalidOperationException>(() => _service.SetHomeUrl(_game, reloaded, "javascript:alert(1)"));
+        Assert.Contains("http", invalid.Message);
+
+        _service.SetHomeUrl(_game, reloaded, "");
+        Assert.Equal("", reloaded.HomeUrl);
     }
 
     private ParsedMod CreateParsed(string name, string content, string relativeDest = "nativePC/shared.bin")

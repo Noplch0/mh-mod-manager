@@ -110,6 +110,85 @@ public sealed class EquipmentRemapperTests : IDisposable
     }
 
     [Fact]
+    public void ExistingLooseTargetIsReportedWithoutChangingEitherFile()
+    {
+        const string source = "natives/art/model/character/ch03/001/001/body.mesh";
+        const string target = "natives/art/model/character/ch03/002/001/body.mesh";
+        var from = WriteTemp(source, [1]);
+        var to = WriteTemp(target, [2]);
+
+        var ex = Assert.Throws<EquipmentConflictException>(() => EquipmentRemapper.Apply(
+            GameId.Wilds, _tmp, [source, target], EquipKind.FemaleArmor, 1001, 2001, false, false));
+
+        Assert.Equal(target, Assert.Single(ex.Paths).Replace('\\', '/'));
+        Assert.Equal(new byte[] { 1 }, File.ReadAllBytes(from));
+        Assert.Equal(new byte[] { 2 }, File.ReadAllBytes(to));
+    }
+
+    [Fact]
+    public void PakPathsWithTheSameFinalHashAreReportedWithoutChangingThePak()
+    {
+        const string source = "natives/STM/GameDesign/Equip/_Prefab/Armor/Female/001/001/001_001_avp.user.3";
+        const string target = "natives/STM/GameDesign/Equip/_Prefab/Armor/Female/002/001/002_001_avp.user.3";
+        var original = BuildV4Pak((PakHash.PathHash(source), [1]), (PakHash.PathHash(target), [2]));
+        var pak = WriteTemp("armor.pak", original);
+
+        var ex = Assert.Throws<EquipmentConflictException>(() => EquipmentRemapper.Apply(
+            GameId.Wilds, _tmp, ["armor.pak"], EquipKind.FemaleArmor, 1001, 2001, true, false));
+
+        Assert.EndsWith(target.ToLowerInvariant(), Assert.Single(ex.Paths));
+        Assert.Equal(original, File.ReadAllBytes(pak));
+    }
+
+    [Fact]
+    public void FailedCommitRestoresLooseNamesAvpBytesAndPakAcrossComponents()
+    {
+        const string loose = "natives/art/model/character/ch03/001/001/body.mesh";
+        const string avp = "natives/STM/GameDesign/Equip/_Prefab/Armor/Female/001/001/001_001_avp.user.3";
+        var meshFile = WriteTemp("c1/" + loose, [1]);
+        var avpFile = WriteTemp("c1/" + avp, [2]);
+        var original = BuildV4Pak((PakHash.PathHash(avp), [3]));
+        var pakFile = WriteTemp("c2/armor.pak", original);
+
+        Assert.Throws<IOException>(() => EquipmentRemapper.Apply(GameId.Wilds, _tmp,
+            [("c1/", [loose, avp]), ("c2/", ["armor.pak"])], EquipKind.FemaleArmor, 1001, 2001, false, false,
+            () =>
+            {
+                Assert.False(File.Exists(meshFile));
+                Assert.False(File.Exists(avpFile));
+                Assert.NotEqual(original, File.ReadAllBytes(pakFile));
+                throw new IOException("info.json 保存失败");
+            }));
+
+        Assert.Equal(new byte[] { 1 }, File.ReadAllBytes(meshFile));
+        Assert.Equal(new byte[] { 2 }, File.ReadAllBytes(avpFile));
+        Assert.Equal(original, File.ReadAllBytes(pakFile));
+        Assert.Equal(3, Directory.GetFiles(_tmp, "*", SearchOption.AllDirectories).Length);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WildsAvpCanBeMovedUsingThePrefabFlagFromTheEquipmentList(bool usePak)
+    {
+        const string source = "natives/STM/GameDesign/Equip/_Prefab/Armor/Female/001/001/001_001_avp.user.3";
+        const string target = "natives/STM/GameDesign/Equip/_Prefab/Armor/Female/002/001/002_001_avp.user.3";
+        var file = usePak ? "armor.pak" : source;
+        var path = WriteTemp(file, usePak ? BuildV4Pak((PakHash.PathHash(source), [1])) : [1]);
+        var equipment = Assert.Single(EquipmentResolver.Resolve(GameId.Wilds, [file], _tmp));
+        Assert.True(equipment.IsPfb);
+
+        Assert.True(EquipmentRemapper.Apply(GameId.Wilds, _tmp, [file], EquipKind.FemaleArmor, equipment.Id, 2001,
+            equipment.IsPfb, false) > 0);
+
+        var bytes = File.ReadAllBytes(usePak ? path : Path.Combine(_tmp, target));
+        var offset = usePak ? (int)BitConverter.ToInt64(bytes, 24) : 0;
+        Assert.Equal((byte)'2', bytes[offset + 0x9C]);
+        if (usePak) Assert.Equal(PakHash.PathHash(target), BitConverter.ToUInt64(bytes, 16));
+        else Assert.False(File.Exists(path));
+    }
+
+    [Fact]
     public void WorldArmorLooseFilesRenameFolderAndFile()
     {
         var relative = @"nativePC\pl\f_equip\pl084_0000\body\mod\f_body084_0000.mod3";

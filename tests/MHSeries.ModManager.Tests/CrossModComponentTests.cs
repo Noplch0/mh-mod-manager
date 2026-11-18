@@ -15,7 +15,7 @@ public sealed class CrossModComponentTests : IDisposable
 
     public CrossModComponentTests()
     {
-        _game = new GameProfile(GameId.World, "cross-test", "test", "test", "test.exe", _appId, "test", "", 0);
+        _game = new GameProfile(GameId.World, "cross-test", "test", "test", "test.exe", _appId, "test", false);
         Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, _game.ExeName), "fake-game");
         _settings.Load();

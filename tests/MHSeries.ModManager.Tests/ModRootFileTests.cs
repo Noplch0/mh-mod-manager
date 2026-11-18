@@ -26,7 +26,7 @@ public sealed class ModRootFileTests : IDisposable
     [Fact]
     public void WildsImportDropsRootJunkFiles()
     {
-        var game = CreateGame(GameId.Wilds, "MonsterHunterWilds.exe", "re_chunk_000.pak.sub_000.pak.patch_", 6);
+        var game = CreateGame(GameId.Wilds, "MonsterHunterWilds.exe", true);
         var source = NewModDir();
         WriteFile(source, "natives/art/x.tex", "tex");
         WriteFile(source, "说明.txt", "intro");
@@ -44,7 +44,7 @@ public sealed class ModRootFileTests : IDisposable
     [Fact]
     public void WorldImportKeepsRootPakAndLoaderDllOnly()
     {
-        var game = CreateGame(GameId.World, "MonsterHunterWorld.exe", "", 0);
+        var game = CreateGame(GameId.World, "MonsterHunterWorld.exe", false);
         var source = NewModDir();
         WriteFile(source, "nativePC/x.bin", "bin");
         WriteFile(source, "mymod.pak", "pak");
@@ -70,7 +70,7 @@ public sealed class ModRootFileTests : IDisposable
     [Fact]
     public void LegacyRootJunkInRecordIsNotRedeployedAndRemovedOnDisable()
     {
-        var game = CreateGame(GameId.World, "MonsterHunterWorld.exe", "", 0);
+        var game = CreateGame(GameId.World, "MonsterHunterWorld.exe", false);
         var source = NewModDir();
         WriteFile(source, "nativePC/x.bin", "bin");
         var installed = _service.Import(game, source).Mods[0];
@@ -93,7 +93,7 @@ public sealed class ModRootFileTests : IDisposable
     [Fact]
     public void WorldArchiveWithOnlyRootJunkIsRejected()
     {
-        var game = CreateGame(GameId.World, "MonsterHunterWorld.exe", "", 0);
+        var game = CreateGame(GameId.World, "MonsterHunterWorld.exe", false);
         var source = NewModDir();
         WriteFile(source, "说明.txt", "intro");
         WriteFile(source, "cover.png", "cover");
@@ -101,9 +101,9 @@ public sealed class ModRootFileTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => _service.Import(game, source));
     }
 
-    private GameProfile CreateGame(GameId id, string exeName, string pakPrefix, int pakBaseId)
+    private GameProfile CreateGame(GameId id, string exeName, bool usesPakMods)
     {
-        var game = new GameProfile(id, "test", "test", "test", exeName, _appId, "test", pakPrefix, pakBaseId);
+        var game = new GameProfile(id, "test", "test", "test", exeName, _appId, "test", usesPakMods);
         File.WriteAllText(Path.Combine(_root, game.ExeName), "fake-game");
         _settings.SetGamePath(game, _root);
         return game;
